@@ -18,7 +18,9 @@ fn build_crypt_intent() -> MapIntent {
 fn run_full_pipeline() -> procgen::tile::map::TileMap {
     let intent = build_crypt_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    let geometry_plan = SimpleGeometryPlanner.plan(&spatial_plan).unwrap();
+    let geometry_plan = SimpleGeometryPlanner::default()
+        .plan(&spatial_plan)
+        .unwrap();
     SimpleRasterizer.rasterize(&geometry_plan).unwrap()
 }
 
@@ -32,7 +34,9 @@ fn run_spatial_plan() -> procgen::spatial::plan::SpatialPlan {
 fn run_geometry_plan() -> procgen::geometry::geom::GeometryPlan {
     let intent = build_crypt_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    SimpleGeometryPlanner.plan(&spatial_plan).unwrap()
+    SimpleGeometryPlanner::default()
+        .plan(&spatial_plan)
+        .unwrap()
 }
 
 #[test]
@@ -174,7 +178,9 @@ fn build_tavern_intent() -> MapIntent {
 fn run_tavern_pipeline() -> procgen::tile::map::TileMap {
     let intent = build_tavern_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    let geometry_plan = SimpleGeometryPlanner.plan(&spatial_plan).unwrap();
+    let geometry_plan = SimpleGeometryPlanner::default()
+        .plan(&spatial_plan)
+        .unwrap();
     SimpleRasterizer.rasterize(&geometry_plan).unwrap()
 }
 
@@ -188,7 +194,9 @@ fn run_tavern_spatial_plan() -> procgen::spatial::plan::SpatialPlan {
 fn run_tavern_geometry_plan() -> procgen::geometry::geom::GeometryPlan {
     let intent = build_tavern_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    SimpleGeometryPlanner.plan(&spatial_plan).unwrap()
+    SimpleGeometryPlanner::default()
+        .plan(&spatial_plan)
+        .unwrap()
 }
 
 #[test]

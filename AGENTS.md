@@ -6,7 +6,7 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), and Phase 3 (enrich SpatialPlan + generic geometry) are complete. Phase 4 (real geometry placement) is in progress — Footprint abstraction, routing extraction, and GeometryValidator done.
+Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), and Phase 3 (enrich SpatialPlan + generic geometry) are complete. Phase 4 (real geometry placement) is in progress — Footprint abstraction, routing extraction, GeometryValidator, and constraint-aware placement done.
 
 ## Pipeline (current)
 
@@ -88,7 +88,7 @@ These live on the types they belong to — no separate utility module:
 ```sh
 cargo run        # Prints ASCII map (default: crypt)
 cargo run -- tavern  # Prints tavern cellar map
-cargo test       # Runs all tests (66 currently: 53 unit/proptest + 13 integration)
+cargo test       # Runs all tests (85 currently: 72 unit/proptest + 13 integration)
 ```
 
 ## Target Architecture

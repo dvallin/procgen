@@ -26,7 +26,8 @@ fn run_crypt() -> Result<(), Box<dyn std::error::Error>> {
     let intent = CryptIntentBuilder.build(&situation)?;
 
     let spatial_plan = procgen::spatial::planner::SimpleSpatialPlanner.plan(&intent)?;
-    let geometry = procgen::geometry::planner::SimpleGeometryPlanner.plan(&spatial_plan)?;
+    let geometry =
+        procgen::geometry::planner::SimpleGeometryPlanner::default().plan(&spatial_plan)?;
     let map = procgen::tile::rasterize::SimpleRasterizer.rasterize(&geometry)?;
 
     println!("=== Noble Crypt ===\n");
@@ -39,7 +40,8 @@ fn run_tavern() -> Result<(), Box<dyn std::error::Error>> {
     let intent = TavernIntentBuilder.build(&situation)?;
 
     let spatial_plan = procgen::spatial::planner::SimpleSpatialPlanner.plan(&intent)?;
-    let geometry = procgen::geometry::planner::SimpleGeometryPlanner.plan(&spatial_plan)?;
+    let geometry =
+        procgen::geometry::planner::SimpleGeometryPlanner::default().plan(&spatial_plan)?;
     let map = procgen::tile::rasterize::SimpleRasterizer.rasterize(&geometry)?;
 
     println!("=== Tavern Cellar ===\n");

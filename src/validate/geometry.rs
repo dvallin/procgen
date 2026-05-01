@@ -7,10 +7,12 @@
 //! - **Link connectivity**: every link references existing spaces.
 //! - **Corridor–room intersection**: corridor segments don't pass through
 //!   rooms they aren't connected to.
+//! - **Corridor–corridor overlap**: detects shared cells between different
+//!   corridors (warning) and shared endpoint cells (error — door overwrite risk).
 
 use std::collections::HashSet;
 
-use crate::geometry::geom::{GeometryPlan, PlacedSpace};
+use crate::geometry::geom::{GeometryPlan, PlacedLink, PlacedSpace};
 use crate::validate::{Severity, ValidationIssue, ValidationResult, Validator};
 
 /// Configuration for geometry validation thresholds.
@@ -49,6 +51,7 @@ impl Validator<GeometryPlan> for GeometryValidator {
         check_link_connectivity(plan, &mut issues);
         check_link_endpoint_validity(plan, &mut issues);
         check_corridor_room_intersection(plan, &mut issues);
+        check_corridor_corridor_overlap(plan, &mut issues);
 
         ValidationResult { issues }
     }
@@ -221,6 +224,103 @@ pub fn check_link_endpoint_validity(plan: &GeometryPlan, issues: &mut Vec<Valida
 
 /// Check that corridor segments don't pass through the interior of rooms
 /// they aren't connected to.
+/// Check for corridor-corridor overlaps: cells shared by two different links.
+/// Reports a Warning for shared corridor cells (visual merging) and an Error
+/// when a corridor segment passes through another corridor's endpoint (door overwrite risk).
+pub fn check_corridor_corridor_overlap(plan: &GeometryPlan, issues: &mut Vec<ValidationIssue>) {
+    if plan.links.len() < 2 {
+        return;
+    }
+
+    // Collect all cells for each corridor, and track endpoints separately.
+    let corridor_cells: Vec<HashSet<(i32, i32)>> =
+        plan.links.iter().map(collect_corridor_cells).collect();
+
+    let corridor_endpoints: Vec<HashSet<(i32, i32)>> = plan
+        .links
+        .iter()
+        .map(|link| {
+            let mut eps = HashSet::new();
+            if let Some(p) = link.points.first() {
+                eps.insert((p.x, p.y));
+            }
+            if let Some(p) = link.points.last() {
+                eps.insert((p.x, p.y));
+            }
+            eps
+        })
+        .collect();
+
+    for i in 0..plan.links.len() {
+        for j in (i + 1)..plan.links.len() {
+            let shared: Vec<_> = corridor_cells[i]
+                .intersection(&corridor_cells[j])
+                .copied()
+                .collect();
+
+            if shared.is_empty() {
+                continue;
+            }
+
+            // Check if any shared cell is an endpoint of either corridor
+            // (door overwrite risk).
+            let mut endpoint_conflicts = Vec::new();
+            let mut interior_overlaps = Vec::new();
+
+            for &cell in &shared {
+                if corridor_endpoints[i].contains(&cell) || corridor_endpoints[j].contains(&cell) {
+                    endpoint_conflicts.push(cell);
+                } else {
+                    interior_overlaps.push(cell);
+                }
+            }
+
+            if !endpoint_conflicts.is_empty() {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "Links {} and {} share endpoint cell(s) {:?} — door overwrite risk",
+                        i, j, endpoint_conflicts,
+                    ),
+                });
+            }
+
+            if !interior_overlaps.is_empty() {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "Links {} and {} share {} corridor cell(s) (visual merging)",
+                        i,
+                        j,
+                        interior_overlaps.len(),
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Collect all cells that a corridor polyline passes through.
+fn collect_corridor_cells(link: &PlacedLink) -> HashSet<(i32, i32)> {
+    let mut cells = HashSet::new();
+    for window in link.points.windows(2) {
+        let a = &window[0];
+        let b = &window[1];
+        if a.x == b.x {
+            let (from, to) = if a.y <= b.y { (a.y, b.y) } else { (b.y, a.y) };
+            for y in from..=to {
+                cells.insert((a.x, y));
+            }
+        } else if a.y == b.y {
+            let (from, to) = if a.x <= b.x { (a.x, b.x) } else { (b.x, a.x) };
+            for x in from..=to {
+                cells.insert((x, a.y));
+            }
+        }
+    }
+    cells
+}
+
 pub fn check_corridor_room_intersection(plan: &GeometryPlan, issues: &mut Vec<ValidationIssue>) {
     for (idx, link) in plan.links.iter().enumerate() {
         if link.points.len() < 2 {
@@ -529,6 +629,99 @@ mod tests {
         check_corridor_room_intersection(&plan, &mut issues);
         assert!(!issues.is_empty());
         assert!(issues[0].message.contains("passes through interior"));
+    }
+
+    // --- Corridor–corridor overlap tests ---
+
+    #[test]
+    fn disjoint_corridors_no_overlap() {
+        let plan = GeometryPlan {
+            spaces: vec![
+                make_space(0, 0, 0, 7, 7),
+                make_space(1, 20, 0, 7, 7),
+                make_space(2, 0, 20, 7, 7),
+            ],
+            links: vec![
+                make_link(vec![Point { x: 6, y: 3 }, Point { x: 20, y: 3 }]),
+                make_link(vec![Point { x: 3, y: 6 }, Point { x: 3, y: 20 }]),
+            ],
+        };
+        let mut issues = Vec::new();
+        check_corridor_corridor_overlap(&plan, &mut issues);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn shared_interior_cells_warn() {
+        // Two corridors share a vertical segment (no endpoint overlap).
+        let plan = GeometryPlan {
+            spaces: vec![
+                make_space(0, 0, 0, 7, 7),
+                make_space(1, 0, 20, 7, 7),
+                make_space(2, 0, 30, 7, 7),
+            ],
+            links: vec![
+                // Link 0: goes south from space 0, turns east to space 1
+                make_link(vec![
+                    Point { x: 3, y: 6 },
+                    Point { x: 3, y: 15 },
+                    Point { x: 3, y: 20 },
+                ]),
+                // Link 1: also goes south from space 0 through same column
+                make_link(vec![
+                    Point { x: 3, y: 6 },
+                    Point { x: 3, y: 25 },
+                    Point { x: 3, y: 30 },
+                ]),
+            ],
+        };
+        let mut issues = Vec::new();
+        check_corridor_corridor_overlap(&plan, &mut issues);
+        // Should detect shared cells (at minimum the overlapping segment y=6..20)
+        assert!(
+            !issues.is_empty(),
+            "Expected corridor overlap warnings/errors"
+        );
+    }
+
+    #[test]
+    fn shared_endpoint_is_error() {
+        // Link 1's segment passes through Link 0's endpoint — door overwrite risk.
+        let plan = GeometryPlan {
+            spaces: vec![
+                make_space(0, 0, 0, 7, 7),
+                make_space(1, 0, 15, 7, 7),
+                make_space(2, 0, 30, 7, 7),
+            ],
+            links: vec![
+                // Link 0: ends at (3, 15) on space 1's boundary
+                make_link(vec![Point { x: 3, y: 6 }, Point { x: 3, y: 15 }]),
+                // Link 1: passes straight through (3, 15) en route to space 2
+                make_link(vec![Point { x: 3, y: 10 }, Point { x: 3, y: 30 }]),
+            ],
+        };
+        let mut issues = Vec::new();
+        check_corridor_corridor_overlap(&plan, &mut issues);
+        let errors: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Error)
+            .collect();
+        assert!(
+            !errors.is_empty(),
+            "Expected error for endpoint cell overlap, got: {:?}",
+            issues
+        );
+    }
+
+    #[test]
+    fn single_link_no_overlap_check() {
+        let plan = GeometryPlan {
+            spaces: vec![make_space(0, 0, 0, 7, 7), make_space(1, 20, 0, 7, 7)],
+            links: vec![make_link(vec![Point { x: 6, y: 3 }, Point { x: 20, y: 3 }])],
+        };
+        let mut issues = Vec::new();
+        check_corridor_corridor_overlap(&plan, &mut issues);
+        assert!(issues.is_empty());
     }
 
     // --- Full validator integration test ---
