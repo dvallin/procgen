@@ -1,15 +1,20 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use tracing::{debug, info, info_span, warn};
+
 use crate::geometry::geom::*;
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceId, SpaceKind, SpatialConstraint, SpatialPlan};
+use crate::validate::Validator;
+use crate::validate::geometry::GeometryValidator;
 
 #[derive(Debug)]
 pub enum GeometryPlanError {
     UnsupportedSpaceKind,
     MissingEntry,
     EmptyPlan,
+    ValidationFailed(Vec<String>),
 }
 
 impl std::fmt::Display for GeometryPlanError {
@@ -18,6 +23,9 @@ impl std::fmt::Display for GeometryPlanError {
             Self::UnsupportedSpaceKind => write!(f, "unsupported space kind"),
             Self::MissingEntry => write!(f, "no entry space found"),
             Self::EmptyPlan => write!(f, "spatial plan has no spaces"),
+            Self::ValidationFailed(msgs) => {
+                write!(f, "geometry validation failed: {}", msgs.join("; "))
+            }
         }
     }
 }
@@ -57,17 +65,36 @@ impl GeometryPlanner for SimpleGeometryPlanner {
             return Err(GeometryPlanError::EmptyPlan);
         }
 
+        let _span = info_span!(
+            "geometry_planning",
+            spaces = spatial.spaces.len(),
+            links = spatial.links.len()
+        )
+        .entered();
+
         // Build adjacency from links for BFS traversal.
         let adjacency = build_adjacency(spatial);
 
         // Choose the BFS root: prefer a PreferCentral space (hub), otherwise entry.
         let root_id = choose_bfs_root(spatial);
+        info!(root = root_id.0, "selected BFS root");
 
         // BFS from the root to assign (depth, sibling_index) to each space.
         let placements = bfs_assign_positions(root_id, &adjacency, spatial);
 
         // Convert BFS positions into concrete rects.
         let mut placed = place_spaces_from_bfs(spatial, &placements);
+        for p in &placed {
+            debug!(
+                id = p.space_id.0,
+                x = p.rect.x,
+                y = p.rect.y,
+                w = p.rect.w,
+                h = p.rect.h,
+                label = ?p.label,
+                "placed space"
+            );
+        }
 
         // Post-placement constraint adjustments.
         apply_constraint_adjustments(spatial, &mut placed, &self.config);
@@ -75,13 +102,90 @@ impl GeometryPlanner for SimpleGeometryPlanner {
         // Enforce minimum gap between all space pairs.
         enforce_minimum_gap(&mut placed, self.config.min_gap);
 
+        // Normalize coordinates so all spaces have positive positions with margin.
+        // This prevents rooms from being pushed to negative coords or the map edge
+        // by constraint adjustments (e.g. PreferPerimeter nudge).
+        normalize_positions(&mut placed);
+        {
+            let bbox = compute_bounding_box(&placed);
+            debug!(
+                min_x = bbox.x,
+                min_y = bbox.y,
+                width = bbox.w,
+                height = bbox.h,
+                "bounding box after normalization"
+            );
+        }
+
         // Route links between placed spaces.
         let links = ZShapeRouter.route(spatial, &placed);
+        info!(corridors = links.len(), "routing complete");
 
         Ok(GeometryPlan {
             spaces: placed,
             links,
         })
+    }
+}
+
+impl SimpleGeometryPlanner {
+    /// Runs `plan()` followed by `GeometryValidator`. On validation errors,
+    /// retries up to `MAX_RETRIES` times with relaxed spacing (+2 each retry).
+    pub fn plan_with_validation(
+        &self,
+        spatial: &SpatialPlan,
+    ) -> Result<GeometryPlan, GeometryPlanError> {
+        let _span = info_span!("plan_with_validation").entered();
+        const MAX_RETRIES: u32 = 3;
+
+        let mut last_errors = Vec::new();
+
+        for attempt in 0..=MAX_RETRIES {
+            let planner = SimpleGeometryPlanner {
+                config: PlacementConfig {
+                    min_gap: self.config.min_gap + (attempt as i32) * 2,
+                    separation_gap: self.config.separation_gap + (attempt as i32) * 2,
+                },
+            };
+
+            info!(
+                attempt = attempt,
+                min_gap = planner.config.min_gap,
+                separation_gap = planner.config.separation_gap,
+                "planning attempt"
+            );
+            let plan = planner.plan(spatial)?;
+            let result = GeometryValidator::default().validate(&plan);
+
+            // Log all validation issues.
+            for issue in &result.issues {
+                match issue.severity {
+                    crate::validate::Severity::Error => {
+                        warn!(msg = %issue.message, "validation error")
+                    }
+                    crate::validate::Severity::Warning => {
+                        warn!(msg = %issue.message, "validation warning")
+                    }
+                    crate::validate::Severity::Info => {
+                        debug!(msg = %issue.message, "validation info")
+                    }
+                }
+            }
+
+            if result.is_ok() {
+                info!(attempt = attempt, "validation passed");
+                return Ok(plan);
+            }
+
+            last_errors = result
+                .issues
+                .iter()
+                .filter(|i| i.severity == crate::validate::Severity::Error)
+                .map(|i| i.message.clone())
+                .collect();
+        }
+
+        Err(GeometryPlanError::ValidationFailed(last_errors))
     }
 }
 
@@ -337,6 +441,7 @@ fn apply_perimeter_preference(placed: &mut [PlacedSpace], perimeter_spaces: &Has
         space.rect.x += dx;
         space.rect.y += dy;
         space.footprint = Footprint::Rect(space.rect);
+        debug!(id = space.space_id.0, dx = dx, dy = dy, "perimeter nudge");
     }
 }
 
@@ -373,6 +478,7 @@ fn enforce_separation(placed: &mut [PlacedSpace], a: SpaceId, b: SpaceId, min_ga
         placed[idx_b].rect.y += shift;
     }
     placed[idx_b].footprint = Footprint::Rect(placed[idx_b].rect);
+    debug!(a = a.0, b = b.0, deficit = deficit, "enforced separation");
 }
 
 /// Enforce minimum gap between all space pairs by iteratively pushing apart
@@ -422,6 +528,13 @@ fn enforce_minimum_gap(placed: &mut [PlacedSpace], min_gap: i32) {
                 // Update footprints.
                 placed[i].footprint = Footprint::Rect(placed[i].rect);
                 placed[j].footprint = Footprint::Rect(placed[j].rect);
+                debug!(
+                    space_i = placed[i].space_id.0,
+                    space_j = placed[j].space_id.0,
+                    gap = gap,
+                    min_gap = min_gap,
+                    "pushed spaces apart for minimum gap"
+                );
             }
         }
 
@@ -450,6 +563,39 @@ fn compute_bounding_box(placed: &[PlacedSpace]) -> Rect {
         y: min_y,
         w: max_x - min_x,
         h: max_y - min_y,
+    }
+}
+
+/// Normalize all placed spaces so that the minimum x and y coordinates are at
+/// least `MARGIN` tiles from the origin. This ensures corridors and walls have
+/// room to render even after constraint adjustments push spaces around.
+fn normalize_positions(placed: &mut [PlacedSpace]) {
+    const MARGIN: i32 = 2;
+
+    if placed.is_empty() {
+        return;
+    }
+
+    let min_x = placed.iter().map(|s| s.rect.x).min().unwrap_or(0);
+    let min_y = placed.iter().map(|s| s.rect.y).min().unwrap_or(0);
+
+    let shift_x = MARGIN - min_x;
+    let shift_y = MARGIN - min_y;
+
+    if shift_x == 0 && shift_y == 0 {
+        return;
+    }
+
+    debug!(
+        shift_x = shift_x,
+        shift_y = shift_y,
+        "normalizing positions"
+    );
+
+    for space in placed.iter_mut() {
+        space.rect.x += shift_x;
+        space.rect.y += shift_y;
+        space.footprint = Footprint::Rect(space.rect);
     }
 }
 
@@ -800,5 +946,17 @@ mod tests {
         assert_eq!(plan.spaces.len(), 1);
         assert_eq!(plan.spaces[0].rect.w, 7);
         assert_eq!(plan.spaces[0].rect.h, 7);
+    }
+
+    #[test]
+    fn plan_with_validation_passes_for_hub_plan() {
+        let spatial = hub_and_entry_plan();
+        let planner = SimpleGeometryPlanner::default();
+        let plan = planner.plan_with_validation(&spatial);
+        assert!(
+            plan.is_ok(),
+            "plan_with_validation should succeed: {:?}",
+            plan.err()
+        );
     }
 }

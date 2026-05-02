@@ -373,40 +373,23 @@ Validators are registered per-layer. The pipeline runner checks after each stage
 
 ---
 
-### Phase 4: Real Geometry Placement
+### Phase 4: Real Geometry Placement ✅
 
-**Goal:** Improve placement algorithm quality, add validation, and wire up a retry loop.
+**Goal:** Algorithmic placement with validation, constraint awareness, and retry logic.
 
-**Status: IN PROGRESS**
+| # | Task | Key additions |
+|---|---|---|
+| 4.1 | `Footprint` enum + data model | `Footprint` (Rect/Cells/Composite) with `bounding_rect()`; rasterizer dispatches on variant |
+| 4.2 | `CorridorRouter` trait | `geometry/routing.rs` — `ZShapeRouter` impl; 3 unit tests |
+| 4.3 | `GeometryValidator` | `validate/geometry.rs` — 6 checks (overlap, spacing, endpoint validity, connectivity, corridor–room intersection, corridor–corridor overlap); `Rect` geometry helpers; 22 unit tests + 5 proptests |
+| 4.4 | Constraint-aware placement | BFS root selection (PreferCentral), perimeter nudge, MustBeSeparated enforcement, min-gap relaxation; `PlacementConfig`; 12 unit tests |
+| 4.5 | Face-based corridor routing | `determine_exit_face`/`determine_entry_face`, mergeable link grouping, L-shape preference; 10 unit tests |
+| 4.6 | Validator pipeline + retry | `plan_with_validation()` with 3 retries + spacing relaxation; door-overwrite fix in rasterizer; `normalize_positions`; `main.rs` wired up |
+| 4.7 | Stress tests | 5 proptests on random SpatialPlans (3–10 spaces, 50 cases); 4 validation integration tests; fuzzer-found normalization bug fixed |
 
-**Context:** Phase 3 delivered a generic BFS-based layout with Z-shape corridor routing that avoids room interiors. Phase 4 adds: the `Footprint` abstraction for non-rectangular shapes, extraction of routing as a swappable trait, constraint-aware placement, formal validation, and retry loops. Phase 4.3 also promoted geometry helpers (`point_on_boundary`, `inflate`, `gap_to`, `segment_crosses_interior`) onto `Rect` in `geometry/geom.rs` so downstream code (validator, routing) uses methods on the type rather than free functions.
+**Design decisions:** Evolve BFS layout (don't replace); validate after (not during) generation; simple retry (relax spacing, up to 3 attempts); `CorridorRouter` trait for future extensibility; `Footprint::Cells`/`Composite` are Phase 8 extension points.
 
-| # | Task | Description | Status |
-|---|---|---|---|
-| 4.1 | Introduce `Footprint` enum (Rect, Cells, Composite) + update data model | `geometry/geom.rs` — `Footprint` with `bounding_rect()`, `PlacedSpace.footprint` field, rasterizer dispatches on variant | ✅ |
-| 4.2 | Extract corridor routing into `geometry/routing.rs` with `trait CorridorRouter` | `ZShapeRouter` impl, 3 unit tests (straight H, straight V, Z-shape) | ✅ |
-| 4.3 | Implement `GeometryValidator` | `validate/geometry.rs` — overlap check, minimum spacing, link endpoint validity, link connectivity, corridor–room intersection check; 18 unit tests + 5 proptests. Also added `Rect::point_on_boundary`, `Rect::inflate`, `Rect::gap_to`, `Rect::segment_crosses_interior` to `geometry/geom.rs` (15 unit tests). | ✅ |
-| 4.4 | Make placement constraint-aware | `geometry/planner.rs` — smart BFS root selection (`PreferCentral` as root), post-placement perimeter nudge (`PreferPerimeter`), `MustBeSeparated` gap enforcement, iterative minimum-gap relaxation between all pairs; `PlacementConfig` struct; `GeometryValidator` integration in 8 unit tests. | ✅ |
-| 4.5 | Improve corridor routing robustness | `geometry/routing.rs` — **Known issue:** two corridors from the same room face share cells and overwrite each other's doors (see crypt: hub→Chapel Vestry & hub→Reliquary both exit south at (11,10), sharing 9 cells). Fix: stagger exit points along the same face when multiple links depart from it; consider already-routed corridors when choosing transfer segments; try alternate transfer points, L-shape fallback, last-resort pass-through. `check_corridor_corridor_overlap` (added in 4.3) now detects these — use it as the success metric. | |
-| 4.6 | Wire validator into pipeline + retry logic | `geometry/planner.rs` — `plan_with_validation()` that runs `GeometryValidator` post-generation and retries with relaxed spacing on `Severity::Error`; also fix rasterizer door-overwrite bug (in `carve_link`, skip cells already set to `Door`/`LockedDoor` during floor carving so later corridors can't erase earlier doors); update `main.rs` | |
-| 4.7 | Stress test + final integration | Proptest: random `SpatialPlan`s (3–10 spaces), assert validation passes + rasterizer produces connected maps; fix fuzzer-found issues | |
-
-**Design decisions for Phase 4:**
-
-- **Evolve, don't replace.** The BFS tree layout stays as the core algorithm. Constraint awareness is added as adjustments to the existing placement pass, not a new solver.
-- **Validate after, not during.** The `GeometryValidator` runs post-generation. This keeps the planner simple and makes validation independently testable.
-- **Retry is simple.** On failure: increase `DEPTH_SPACING` and `SIBLING_SPACING` by 2, retry up to 3 times. No complex backtracking.
-- **Routing extensibility via trait.** `CorridorRouter` is a trait so future Phase 8 work (A*, meandering corridors) can be dropped in without touching placement.
-- **Footprint is forward-looking.** Only `Footprint::Rect` is used in Phase 4. `Cells` and `Composite` exist as extension points for Phase 8 (caves, L-shaped rooms).
-
-**Parallelization notes:**
-- 4.1 + 4.2 were independent (different files) → done in parallel ✅
-- 4.3 + 4.4 are mostly independent (4.3 writes `validate/geometry.rs`, 4.4 modifies `geometry/planner.rs`) → can be parallelized
-- 4.5 depends on 4.3 (needs validation to see what's broken)
-- 4.6 depends on 4.3 + 4.4 + 4.5 (orchestrates them)
-- 4.7 depends on 4.6 (stress-tests the full loop)
-
-**Exit criterion:** Placement is algorithmic, constraint-aware, validated, and produces reasonable output for both demos. 72+ tests passing including geometry validation.
+**Result:** 103 tests (81 unit + 22 integration), both demos produce validated output, `--trace` pipeline observability via `tracing`.
 
 ---
 

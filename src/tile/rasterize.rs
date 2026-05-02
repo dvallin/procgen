@@ -1,5 +1,6 @@
 use crate::geometry::geom::*;
 use crate::tile::map::*;
+use tracing::{debug, info, info_span};
 
 #[derive(Debug)]
 pub enum RasterizeError {
@@ -29,6 +30,13 @@ impl Rasterizer for SimpleRasterizer {
             return Err(RasterizeError::EmptyLayout);
         }
 
+        let _span = info_span!(
+            "rasterization",
+            rooms = layout.spaces.len(),
+            corridors = layout.links.len()
+        )
+        .entered();
+
         let mut max_x = 0;
         let mut max_y = 0;
 
@@ -44,6 +52,7 @@ impl Rasterizer for SimpleRasterizer {
         }
 
         let mut map = TileMap::new((max_x + 1) as u32, (max_y + 1) as u32);
+        info!(width = map.width, height = map.height, "created tile map");
 
         for f in &layout.spaces {
             fill_room(&mut map, &f.footprint);
@@ -54,6 +63,20 @@ impl Rasterizer for SimpleRasterizer {
         }
 
         infer_walls(&mut map);
+
+        {
+            let floor_count = map.tiles.iter().filter(|t| **t == Tile::Floor).count();
+            let wall_count = map.tiles.iter().filter(|t| **t == Tile::Wall).count();
+            let door_count = map.tiles.iter().filter(|t| **t == Tile::Door).count();
+            let locked_count = map.tiles.iter().filter(|t| **t == Tile::LockedDoor).count();
+            info!(
+                floor = floor_count,
+                wall = wall_count,
+                door = door_count,
+                locked_door = locked_count,
+                "rasterization complete"
+            );
+        }
 
         Ok(map)
     }
@@ -89,11 +112,29 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
         if a.x == b.x {
             let (from, to) = if a.y <= b.y { (a.y, b.y) } else { (b.y, a.y) };
             for y in from..=to {
+                let existing = map.get(a.x, y);
+                if existing == Some(Tile::Door) || existing == Some(Tile::LockedDoor) {
+                    debug!(
+                        x = a.x,
+                        y = y,
+                        "preserved existing door during corridor carving"
+                    );
+                    continue;
+                }
                 map.set(a.x, y, Tile::Floor);
             }
         } else if a.y == b.y {
             let (from, to) = if a.x <= b.x { (a.x, b.x) } else { (b.x, a.x) };
             for x in from..=to {
+                let existing = map.get(x, a.y);
+                if existing == Some(Tile::Door) || existing == Some(Tile::LockedDoor) {
+                    debug!(
+                        x = x,
+                        y = a.y,
+                        "preserved existing door during corridor carving"
+                    );
+                    continue;
+                }
                 map.set(x, a.y, Tile::Floor);
             }
         }
@@ -201,6 +242,68 @@ mod tests {
         let links_strat = proptest::collection::vec(arb_placed_link(), 0..=4);
 
         (spaces_strat, links_strat).prop_map(|(spaces, links)| GeometryPlan { spaces, links })
+    }
+
+    #[test]
+    fn door_not_overwritten_by_later_corridor() {
+        // Two rooms side by side, two links that share a point.
+        // Link A places a Door at the shared point; link B's floor
+        // carving must NOT overwrite it.
+        let shared = Point { x: 10, y: 5 };
+
+        let room_a = Rect {
+            x: 4,
+            y: 2,
+            w: 7,
+            h: 7,
+        };
+        let room_b = Rect {
+            x: 12,
+            y: 2,
+            w: 7,
+            h: 7,
+        };
+
+        let link_a = PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 10, y: 3 }, shared],
+        };
+        // Link B is a horizontal corridor that passes through the shared point.
+        let link_b = PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![shared, Point { x: 14, y: 5 }],
+        };
+
+        let plan = GeometryPlan {
+            spaces: vec![
+                PlacedSpace {
+                    space_id: SpaceId(0),
+                    rect: room_a,
+                    footprint: Footprint::Rect(room_a),
+                    style: RealizationStyle::RoomLike,
+                    label: None,
+                },
+                PlacedSpace {
+                    space_id: SpaceId(1),
+                    rect: room_b,
+                    footprint: Footprint::Rect(room_b),
+                    style: RealizationStyle::RoomLike,
+                    label: None,
+                },
+            ],
+            links: vec![link_a, link_b],
+        };
+
+        let map = SimpleRasterizer.rasterize(&plan).unwrap();
+        let tile_at_shared = map.get(shared.x, shared.y);
+
+        assert!(
+            tile_at_shared == Some(Tile::Door) || tile_at_shared == Some(Tile::LockedDoor),
+            "Expected Door or LockedDoor at shared point ({}, {}), got {:?}",
+            shared.x,
+            shared.y,
+            tile_at_shared,
+        );
     }
 
     proptest! {

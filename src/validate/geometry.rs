@@ -276,10 +276,14 @@ pub fn check_corridor_corridor_overlap(plan: &GeometryPlan, issues: &mut Vec<Val
             }
 
             if !endpoint_conflicts.is_empty() {
+                // Downgraded from Error to Warning: the rasterizer now
+                // preserves existing Door/LockedDoor tiles during floor
+                // carving, so shared endpoints from merged corridors
+                // (Phase 4.5 face-based merging) are no longer destructive.
                 issues.push(ValidationIssue {
-                    severity: Severity::Error,
+                    severity: Severity::Warning,
                     message: format!(
-                        "Links {} and {} share endpoint cell(s) {:?} — door overwrite risk",
+                        "Links {} and {} share endpoint cell(s) {:?} — merged exit point",
                         i, j, endpoint_conflicts,
                     ),
                 });
@@ -685,8 +689,9 @@ mod tests {
     }
 
     #[test]
-    fn shared_endpoint_is_error() {
-        // Link 1's segment passes through Link 0's endpoint — door overwrite risk.
+    fn shared_endpoint_is_warning() {
+        // Link 1's segment passes through Link 0's endpoint — merged exit.
+        // Downgraded from Error to Warning since the rasterizer now preserves doors.
         let plan = GeometryPlan {
             spaces: vec![
                 make_space(0, 0, 0, 7, 7),
@@ -702,14 +707,24 @@ mod tests {
         };
         let mut issues = Vec::new();
         check_corridor_corridor_overlap(&plan, &mut issues);
+        let warnings: Vec<_> = issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warning)
+            .collect();
+        assert!(
+            !warnings.is_empty(),
+            "Expected warning for endpoint cell overlap, got: {:?}",
+            issues
+        );
+        // Should NOT be an error (was downgraded).
         let errors: Vec<_> = issues
             .iter()
             .filter(|i| i.severity == Severity::Error)
             .collect();
         assert!(
-            !errors.is_empty(),
-            "Expected error for endpoint cell overlap, got: {:?}",
-            issues
+            errors.is_empty(),
+            "Shared endpoints should be warnings not errors, got: {:?}",
+            errors
         );
     }
 

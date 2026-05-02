@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use tracing::{debug, info, info_span};
+
 use crate::intent::graph::*;
 use crate::intent::map_intent::MapIntent;
 use crate::spatial::plan::*;
@@ -34,6 +36,7 @@ pub struct SimpleSpatialPlanner;
 
 impl SpatialPlanner for SimpleSpatialPlanner {
     fn plan(&self, intent: &MapIntent) -> Result<SpatialPlan, SpatialPlanError> {
+        let _span = info_span!("spatial_planning").entered();
         let scenario = &intent.structural_graph;
         let mut mapping = HashMap::<ScenarioNodeId, SpaceId>::new();
         let mut spaces = Vec::new();
@@ -62,6 +65,21 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             });
         }
 
+        for space in &spaces {
+            let (w, h) = match &space.kind {
+                SpaceKind::Atomic(a) => (a.width, a.height),
+            };
+            debug!(
+                id = space.id.0,
+                role = ?space.role,
+                archetype = ?space.archetype,
+                width = w,
+                height = h,
+                label = ?space.label,
+                "resolved space"
+            );
+        }
+
         let mut links = Vec::new();
         for edge in &scenario.edges {
             let from = *mapping
@@ -79,9 +97,29 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             });
         }
 
+        for link in &links {
+            debug!(
+                from = link.from.0,
+                to = link.to.0,
+                role = ?link.role,
+                "created link"
+            );
+        }
+
         // Derive constraints from the structural graph.
         // For now, just mark gate relationships.
         let constraints = derive_default_constraints(&spaces, scenario);
+
+        for constraint in &constraints {
+            debug!(?constraint, "derived constraint");
+        }
+
+        info!(
+            spaces = spaces.len(),
+            links = links.len(),
+            constraints = constraints.len(),
+            "spatial plan complete"
+        );
 
         Ok(SpatialPlan {
             spaces,

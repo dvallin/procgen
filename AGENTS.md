@@ -6,7 +6,7 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), and Phase 3 (enrich SpatialPlan + generic geometry) are complete. Phase 4 (real geometry placement) is in progress — Footprint abstraction, routing extraction, GeometryValidator, and constraint-aware placement done.
+Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), and Phase 4 (real geometry placement) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, and stress tests all done.
 
 ## Pipeline (current)
 
@@ -40,7 +40,7 @@ src/
 ├── geometry/            # Concrete geometry placement
 │   ├── geom.rs          # Point, Rect, Footprint, PlacedSpace, GeometryPlan
 │   ├── planner.rs       # SpatialPlan → GeometryPlan (BFS layout + constraint-aware placement)
-│   └── routing.rs       # CorridorRouter trait + ZShapeRouter (Z-shape corridor routing)
+│   └── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
 ├── tile/                # Tile-level rasterization
 │   ├── map.rs           # TileMap, Tile enum, flood_fill
 │   ├── rasterize.rs     # GeometryPlan → TileMap (trait + impl + proptest)
@@ -88,7 +88,11 @@ These live on the types they belong to — no separate utility module:
 ```sh
 cargo run        # Prints ASCII map (default: crypt)
 cargo run -- tavern  # Prints tavern cellar map
-cargo test       # Runs all tests (85 currently: 72 unit/proptest + 13 integration)
+cargo run -- crypt --trace          # INFO-level pipeline trace (to stderr)
+cargo run -- crypt --trace=debug    # DEBUG-level (placement details, routing decisions)
+cargo run -- crypt --trace=all      # TRACE-level (everything)
+RUST_LOG=procgen=debug cargo run -- crypt --trace  # Override via env var
+cargo test       # Runs all tests (103 currently: 81 unit/proptest + 22 integration)
 ```
 
 ## Target Architecture
