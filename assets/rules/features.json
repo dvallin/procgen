@@ -1,0 +1,96 @@
+[
+  {
+    "kind": "Chest",
+    "strategy": "Center",
+    "required": true,
+    "max_count": 1,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "contains_key"
+  },
+  {
+    "kind": "Table",
+    "strategy": "Center",
+    "required": false,
+    "max_count": 1,
+    "match_role": "Hub",
+    "match_archetype": null,
+    "match_tag": null
+  },
+  {
+    "kind": "Barrel",
+    "strategy": "WallAdjacent",
+    "required": false,
+    "max_count": 2,
+    "match_role": "Hub",
+    "match_archetype": null,
+    "match_tag": null
+  },
+  {
+    "kind": "Chest",
+    "strategy": "Center",
+    "required": true,
+    "max_count": 1,
+    "match_role": "Reward",
+    "match_archetype": null,
+    "match_tag": null
+  },
+  {
+    "kind": {
+      "Decoration": "torch"
+    },
+    "strategy": "WallAdjacent",
+    "required": false,
+    "max_count": 2,
+    "match_role": "Entry",
+    "match_archetype": null,
+    "match_tag": null
+  },
+  {
+    "kind": "Sarcophagus",
+    "strategy": "Center",
+    "required": true,
+    "max_count": 1,
+    "match_role": null,
+    "match_archetype": "Vault",
+    "match_tag": "main_goal"
+  },
+  {
+    "kind": {
+      "Decoration": "torch"
+    },
+    "strategy": "WallAdjacent",
+    "required": false,
+    "max_count": 2,
+    "match_role": null,
+    "match_archetype": "Vault",
+    "match_tag": "main_goal"
+  },
+  {
+    "kind": "Barrel",
+    "strategy": "WallAdjacent",
+    "required": false,
+    "max_count": 2,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "barrels"
+  },
+  {
+    "kind": "Shelf",
+    "strategy": "WallAdjacent",
+    "required": false,
+    "max_count": 2,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "food"
+  },
+  {
+    "kind": "Chest",
+    "strategy": "Corner",
+    "required": false,
+    "max_count": 1,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "smuggling"
+  }
+]

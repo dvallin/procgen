@@ -1,5 +1,7 @@
 //! Data model for placed entities — the output of the entity planning stage.
 
+use serde::{Deserialize, Serialize};
+
 use crate::geometry::geom::Point;
 use crate::spatial::plan::SpaceId;
 use crate::tag::Tag;
@@ -9,7 +11,7 @@ use crate::tag::Tag;
 /// Kept as a stringly-typed ID for MVP — any scenario can introduce new entity
 /// types (e.g. `"skeleton_guardian"`, `"tavern_rat"`) without growing an enum.
 /// A proper archetype registry with stats/behavior is deferred to Phase 8.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EntityArchetypeId(pub String);
 
 impl From<&str> for EntityArchetypeId {

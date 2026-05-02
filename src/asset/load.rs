@@ -1,11 +1,273 @@
-use serde::de::DeserializeOwned;
-use std::fs;
-use std::path::Path;
+//! Asset loading utilities for JSON rule files.
+//!
+//! Provides generic `load_rules` functions that deserialize a JSON array
+//! from either a file path or an embedded string (via `include_str!`).
+//!
+//! The [`load_rules_with_fallback`] function implements the preferred pattern:
+//! try a file path first (allows user overrides), fall back to compiled-in defaults.
 
-pub fn load_json_file<T: DeserializeOwned>(
+use serde::de::DeserializeOwned;
+use std::path::{Path, PathBuf};
+
+use crate::entity::rules::EntityRule;
+use crate::feature::rules::FeatureRule;
+
+// ─── Embedded defaults (compiled into the binary) ───────────────────────────
+
+/// Default feature rules, embedded at compile time.
+const EMBEDDED_FEATURE_RULES: &str = include_str!("../../assets/rules/features.json");
+
+/// Default entity rules, embedded at compile time.
+const EMBEDDED_ENTITY_RULES: &str = include_str!("../../assets/rules/entities.json");
+
+// ─── Error type ─────────────────────────────────────────────────────────────
+
+/// Errors that can occur when loading asset files.
+#[derive(Debug)]
+pub enum AssetLoadError {
+    /// The file could not be read from disk.
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// The file content could not be parsed as valid JSON.
+    Parse {
+        path: String,
+        source: serde_json::Error,
+    },
+}
+
+impl std::fmt::Display for AssetLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io { path, source } => {
+                write!(
+                    f,
+                    "failed to read asset file '{}': {}",
+                    path.display(),
+                    source
+                )
+            }
+            Self::Parse { path, source } => {
+                write!(f, "failed to parse asset '{}': {}", path, source)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AssetLoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+        }
+    }
+}
+
+// ─── Generic loaders ────────────────────────────────────────────────────────
+
+/// Load a JSON array of rules from a file path.
+///
+/// # Example
+/// ```no_run
+/// use procgen::asset::load::load_rules;
+/// use procgen::feature::rules::FeatureRule;
+///
+/// let rules: Vec<FeatureRule> = load_rules("assets/rules/features.json").unwrap();
+/// ```
+pub fn load_rules<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<T>, AssetLoadError> {
+    let path = path.as_ref();
+    let text = std::fs::read_to_string(path).map_err(|e| AssetLoadError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    serde_json::from_str(&text).map_err(|e| AssetLoadError::Parse {
+        path: path.display().to_string(),
+        source: e,
+    })
+}
+
+/// Load rules from a JSON string (for `include_str!` embedded usage).
+///
+/// The `label` argument is used in error messages to identify the source.
+///
+/// # Example
+/// ```
+/// use procgen::asset::load::load_rules_from_str;
+/// use procgen::feature::rules::FeatureRule;
+///
+/// let json = r#"[{"kind":"Chest","strategy":"Center","required":true,"max_count":1,"match_role":null,"match_archetype":null,"match_tag":null}]"#;
+/// let rules: Vec<FeatureRule> = load_rules_from_str(json, "inline").unwrap();
+/// assert_eq!(rules.len(), 1);
+/// ```
+pub fn load_rules_from_str<T: DeserializeOwned>(
+    json: &str,
+    label: &str,
+) -> Result<Vec<T>, AssetLoadError> {
+    serde_json::from_str(json).map_err(|e| AssetLoadError::Parse {
+        path: label.to_string(),
+        source: e,
+    })
+}
+
+/// Load rules from a file path if it exists, otherwise fall back to an
+/// embedded JSON string.
+///
+/// This is the preferred loading strategy: it allows users to override
+/// rules by placing a JSON file at the expected path, while ensuring
+/// the application always works out-of-the-box with compiled-in defaults.
+pub fn load_rules_with_fallback<T: DeserializeOwned>(
     path: impl AsRef<Path>,
-) -> Result<T, Box<dyn std::error::Error>> {
-    let text = fs::read_to_string(path)?;
-    let value = serde_json::from_str::<T>(&text)?;
-    Ok(value)
+    embedded_fallback: &str,
+) -> Result<Vec<T>, AssetLoadError> {
+    let path = path.as_ref();
+    if path.exists() {
+        load_rules(path)
+    } else {
+        load_rules_from_str(embedded_fallback, &path.display().to_string())
+    }
+}
+
+// ─── Convenience functions for default rule sets ────────────────────────────
+
+/// Default file path for feature rules, relative to the working directory.
+pub const DEFAULT_FEATURE_RULES_PATH: &str = "assets/rules/features.json";
+
+/// Default file path for entity rules, relative to the working directory.
+pub const DEFAULT_ENTITY_RULES_PATH: &str = "assets/rules/entities.json";
+
+/// Load the default feature rules.
+///
+/// Tries `assets/rules/features.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_feature_rules() -> Result<Vec<FeatureRule>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_FEATURE_RULES_PATH, EMBEDDED_FEATURE_RULES)
+}
+
+/// Load the default entity rules.
+///
+/// Tries `assets/rules/entities.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_entity_rules() -> Result<Vec<EntityRule>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_ENTITY_RULES_PATH, EMBEDDED_ENTITY_RULES)
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::plan::EntityArchetypeId;
+    use crate::feature::plan::FeatureKind;
+    use crate::intent::graph::NodeRole;
+    use crate::spatial::plan::SpaceArchetype;
+    use crate::tag::Tag;
+
+    #[test]
+    fn load_embedded_feature_rules_succeeds() {
+        let rules = load_default_feature_rules().unwrap();
+        assert_eq!(rules.len(), 10);
+
+        // Spot-check a known rule.
+        let sarcophagus = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
+        assert!(sarcophagus.is_some());
+        let rule = sarcophagus.unwrap();
+        assert!(rule.required);
+        assert_eq!(rule.match_archetype, Some(SpaceArchetype::Vault));
+        assert_eq!(rule.match_tag, Some(Tag::from("main_goal")));
+    }
+
+    #[test]
+    fn load_embedded_entity_rules_succeeds() {
+        let rules = load_default_entity_rules().unwrap();
+        assert_eq!(rules.len(), 7);
+
+        // Spot-check a known rule.
+        let guardian = rules
+            .iter()
+            .find(|r| r.archetype == EntityArchetypeId::from("skeleton_guardian"));
+        assert!(guardian.is_some());
+        let rule = guardian.unwrap();
+        assert_eq!(rule.min_count, 1);
+        assert_eq!(rule.role_match, Some(NodeRole::Goal));
+    }
+
+    #[test]
+    fn load_rules_from_str_parses_minimal_json() {
+        let json = r#"[
+            {
+                "kind": "Table",
+                "strategy": "Center",
+                "required": false,
+                "max_count": 1,
+                "match_role": "Hub",
+                "match_archetype": null,
+                "match_tag": null
+            }
+        ]"#;
+        let rules: Vec<FeatureRule> = load_rules_from_str(json, "test").unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].kind, FeatureKind::Table);
+    }
+
+    #[test]
+    fn load_rules_from_str_invalid_json_gives_parse_error() {
+        let result: Result<Vec<FeatureRule>, _> =
+            load_rules_from_str("not valid json", "bad_input");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, AssetLoadError::Parse { .. }));
+        assert!(err.to_string().contains("bad_input"));
+    }
+
+    #[test]
+    fn load_rules_nonexistent_file_gives_io_error() {
+        let result: Result<Vec<FeatureRule>, _> = load_rules("/nonexistent/path.json");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, AssetLoadError::Io { .. }));
+        assert!(err.to_string().contains("nonexistent"));
+    }
+
+    #[test]
+    fn load_rules_with_fallback_uses_file_when_present() {
+        // The assets/rules/features.json file exists in our project, so
+        // load_rules_with_fallback should use it rather than the fallback.
+        let rules: Vec<FeatureRule> =
+            load_rules_with_fallback("assets/rules/features.json", "[]").unwrap();
+        // If it used the fallback "[]", we'd get 0 rules.
+        assert_eq!(rules.len(), 10);
+    }
+
+    #[test]
+    fn load_rules_with_fallback_uses_embedded_when_file_missing() {
+        let rules: Vec<FeatureRule> =
+            load_rules_with_fallback("nonexistent/path/features.json", EMBEDDED_FEATURE_RULES)
+                .unwrap();
+        assert_eq!(rules.len(), 10);
+    }
+
+    #[test]
+    fn asset_load_error_display_io() {
+        let err = AssetLoadError::Io {
+            path: PathBuf::from("some/file.json"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("some/file.json"));
+        assert!(msg.contains("file not found"));
+    }
+
+    #[test]
+    fn asset_load_error_display_parse() {
+        let bad_json = "{{invalid";
+        let serde_err = serde_json::from_str::<Vec<FeatureRule>>(bad_json).unwrap_err();
+        let err = AssetLoadError::Parse {
+            path: "test.json".to_string(),
+            source: serde_err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("test.json"));
+        assert!(msg.contains("parse"));
+    }
 }

@@ -12,7 +12,7 @@ use tracing::{debug, info, info_span};
 
 use crate::feature::placement::*;
 use crate::feature::plan::*;
-use crate::feature::rules::{FeatureRule, default_rules, matching_rules};
+use crate::feature::rules::{FeatureRule, matching_rules};
 use crate::geometry::geom::GeometryPlan;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
 use crate::tile::map::TileMap;
@@ -23,11 +23,13 @@ pub trait FeaturePlanner {
     ///
     /// Reads room roles/tags from [`SpatialPlan`], room positions from
     /// [`GeometryPlan`], and tile walkability from [`TileMap`].
+    /// The `rules` slice determines which features get placed in which rooms.
     fn plan(
         &self,
         spatial: &SpatialPlan,
         geometry: &GeometryPlan,
         tiles: &TileMap,
+        rules: &[FeatureRule],
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError>;
 }
@@ -46,6 +48,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         spatial: &SpatialPlan,
         geometry: &GeometryPlan,
         tiles: &TileMap,
+        rules: &[FeatureRule],
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError> {
         let _span = info_span!("feature_planning", rooms = geometry.spaces.len(),).entered();
@@ -54,7 +57,6 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         let spec_map: HashMap<SpaceId, &SpaceSpec> =
             spatial.spaces.iter().map(|s| (s.id, s)).collect();
 
-        let rules = default_rules();
         let mut features = Vec::new();
         // Global occupied set — prevents cross-room overlap on shared boundaries.
         let mut global_occupied: HashSet<crate::geometry::geom::Point> = HashSet::new();
@@ -228,6 +230,7 @@ fn pick_furthest_from_occupied(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::rules::default_rules;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
@@ -324,9 +327,10 @@ mod tests {
             links: vec![],
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
 
         let kinds: Vec<&FeatureKind> = plan.features.iter().map(|f| &f.kind).collect();
@@ -361,9 +365,10 @@ mod tests {
             links: vec![],
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
 
         let has_chest = plan.features.iter().any(|f| f.kind == FeatureKind::Chest);
@@ -389,9 +394,10 @@ mod tests {
             links: vec![],
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
 
         let mut all_cells: Vec<crate::geometry::geom::Point> = Vec::new();
@@ -471,8 +477,9 @@ mod tests {
         };
 
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_rules();
 
-        let result = SimpleFeaturePlanner.plan(&spatial, &geometry, &map, &mut rng);
+        let result = SimpleFeaturePlanner.plan(&spatial, &geometry, &map, &rules, &mut rng);
         // The first room claims the only floor tile for the sarcophagus.
         // The second room's required chest has no tiles left → error.
         assert!(
@@ -499,9 +506,10 @@ mod tests {
             links: vec![],
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
         assert!(
             plan.features.is_empty(),

@@ -8,7 +8,9 @@ pub struct SpaceId(pub u32);
 
 /// Architectural archetype — describes the *character* of a space
 /// independent of its role in the scenario graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SpaceArchetype {
     /// A large open area (great hall, throne room, cavern)
     Hall,

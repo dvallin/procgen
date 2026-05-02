@@ -3,13 +3,14 @@
 //! Each strategy produces candidate [`Point`]s inside a room's [`Rect`],
 //! filtering by tile type and already-occupied cells.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::geometry::geom::{Point, Rect};
 use crate::tile::map::{Tile, TileMap};
 
 /// How a feature should be positioned inside a room.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlacementStrategy {
     /// Place at (or nearest to) the geometric center of the room.
     Center,

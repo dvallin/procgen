@@ -3,6 +3,8 @@
 //! Defines which entities belong in which rooms, driven by
 //! [`NodeRole`], [`SpaceArchetype`], and tags on the [`SpaceSpec`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::entity::plan::EntityArchetypeId;
 use crate::feature::plan::FeatureKind;
 use crate::intent::graph::NodeRole;
@@ -10,7 +12,7 @@ use crate::spatial::plan::{SpaceArchetype, SpaceSpec};
 use crate::tag::Tag;
 
 /// How an entity should be positioned inside a room.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntityPlacementStrategy {
     /// Place at (or nearest to) the geometric center of the room.
     Center,
@@ -26,7 +28,7 @@ pub enum EntityPlacementStrategy {
 ///
 /// All specified criteria are ANDed — a rule with both `role_match` and
 /// `tag_match` set only fires when the space satisfies *both*.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityRule {
     /// What entity archetype to spawn.
     pub archetype: EntityArchetypeId,
@@ -76,92 +78,8 @@ impl EntityRule {
 /// broad ones (tag-only). The planner evaluates them in order, respecting
 /// `max_count` per rule per room.
 pub fn default_entity_rules() -> Vec<EntityRule> {
-    vec![
-        // --- Goal + main_goal → skeleton guardians (the boss room) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("skeleton_guardian"),
-            placement: EntityPlacementStrategy::Center,
-            min_count: 1,
-            max_count: 2,
-            behavior_tags: vec![Tag::from("patrols"), Tag::from("aggressive")],
-            patrol: true,
-            role_match: Some(NodeRole::Goal),
-            archetype_match: None,
-            tag_match: Some(Tag::from("main_goal")),
-        },
-        // --- Hub → skeletons (general wandering enemies) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("skeleton"),
-            placement: EntityPlacementStrategy::RandomFloor,
-            min_count: 1,
-            max_count: 3,
-            behavior_tags: vec![Tag::from("patrols")],
-            patrol: true,
-            role_match: Some(NodeRole::Hub),
-            archetype_match: None,
-            tag_match: None,
-        },
-        // --- Reward → chest mimic (rare surprise) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("chest_mimic"),
-            placement: EntityPlacementStrategy::NearFeature(FeatureKind::Chest),
-            min_count: 0,
-            max_count: 1,
-            behavior_tags: vec![Tag::from("stationary"), Tag::from("disguised")],
-            patrol: false,
-            role_match: Some(NodeRole::Reward),
-            archetype_match: None,
-            tag_match: None,
-        },
-        // --- Gate + locked → gate guardian (stationary sentry) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("gate_guardian"),
-            placement: EntityPlacementStrategy::Center,
-            min_count: 1,
-            max_count: 1,
-            behavior_tags: vec![Tag::from("stationary"), Tag::from("aggressive")],
-            patrol: false,
-            role_match: Some(NodeRole::Gate),
-            archetype_match: None,
-            tag_match: Some(Tag::from("locked")),
-        },
-        // --- Tag "barrels" → rats (vermin near storage) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("rat"),
-            placement: EntityPlacementStrategy::RandomFloor,
-            min_count: 0,
-            max_count: 2,
-            behavior_tags: vec![Tag::from("patrols")],
-            patrol: true,
-            role_match: None,
-            archetype_match: None,
-            tag_match: Some(Tag::from("barrels")),
-        },
-        // --- Tag "food" → rats (vermin near food) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("rat"),
-            placement: EntityPlacementStrategy::RandomFloor,
-            min_count: 0,
-            max_count: 1,
-            behavior_tags: vec![Tag::from("patrols")],
-            patrol: true,
-            role_match: None,
-            archetype_match: None,
-            tag_match: Some(Tag::from("food")),
-        },
-        // --- Tag "smuggling" → smuggler NPC (stationary) ---
-        EntityRule {
-            archetype: EntityArchetypeId::from("smuggler"),
-            placement: EntityPlacementStrategy::RandomFloor,
-            min_count: 1,
-            max_count: 1,
-            behavior_tags: vec![Tag::from("stationary"), Tag::from("dialogue")],
-            patrol: false,
-            role_match: None,
-            archetype_match: None,
-            tag_match: Some(Tag::from("smuggling")),
-        },
-    ]
+    crate::asset::load::load_default_entity_rules()
+        .expect("embedded entity rules are valid JSON (compile-time guarantee)")
 }
 
 /// Returns only the rules that match a given space.
@@ -308,5 +226,70 @@ mod tests {
             "gate without 'locked' tag should match no entity rules, got: {:?}",
             matched.iter().map(|r| &r.archetype).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn serde_round_trip_default_entity_rules() {
+        let rules = default_entity_rules();
+        let json = serde_json::to_string_pretty(&rules).unwrap();
+        let deserialized: Vec<EntityRule> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(rules.len(), deserialized.len());
+        for (orig, deser) in rules.iter().zip(deserialized.iter()) {
+            assert_eq!(orig.archetype, deser.archetype);
+            assert_eq!(orig.placement, deser.placement);
+            assert_eq!(orig.min_count, deser.min_count);
+            assert_eq!(orig.max_count, deser.max_count);
+            assert_eq!(orig.behavior_tags, deser.behavior_tags);
+            assert_eq!(orig.patrol, deser.patrol);
+            assert_eq!(orig.role_match, deser.role_match);
+            assert_eq!(orig.archetype_match, deser.archetype_match);
+            assert_eq!(orig.tag_match, deser.tag_match);
+        }
+    }
+
+    #[test]
+    fn serde_round_trip_from_json_file() {
+        let json = include_str!("../../assets/rules/entities.json");
+        let rules: Vec<EntityRule> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(rules.len(), default_entity_rules().len());
+        // Verify a known rule deserialized correctly.
+        let guardian_rule = rules
+            .iter()
+            .find(|r| r.archetype == EntityArchetypeId::from("skeleton_guardian"));
+        assert!(
+            guardian_rule.is_some(),
+            "should find skeleton_guardian rule"
+        );
+        let rule = guardian_rule.unwrap();
+        assert_eq!(rule.min_count, 1);
+        assert_eq!(rule.max_count, 2);
+        assert!(rule.patrol);
+        assert_eq!(rule.role_match, Some(NodeRole::Goal));
+        assert_eq!(rule.tag_match, Some(Tag::from("main_goal")));
+    }
+
+    #[test]
+    fn serde_near_feature_variant_round_trips() {
+        let rule = EntityRule {
+            archetype: EntityArchetypeId::from("trap_mimic"),
+            placement: EntityPlacementStrategy::NearFeature(FeatureKind::Trap),
+            min_count: 0,
+            max_count: 1,
+            behavior_tags: vec![Tag::from("stationary")],
+            patrol: false,
+            role_match: None,
+            archetype_match: Some(SpaceArchetype::Chamber),
+            tag_match: Some(Tag::from("trapped")),
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        let deser: EntityRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deser.placement,
+            EntityPlacementStrategy::NearFeature(FeatureKind::Trap)
+        );
+        assert_eq!(deser.archetype_match, Some(SpaceArchetype::Chamber));
+        assert_eq!(deser.tag_match, Some(Tag::from("trapped")));
     }
 }

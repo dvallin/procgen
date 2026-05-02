@@ -1,12 +1,14 @@
 //! Data model for placed features — the output of the feature planning stage.
 
+use serde::{Deserialize, Serialize};
+
 use crate::geometry::geom::Point;
 use crate::spatial::plan::SpaceId;
 use crate::tag::Tag;
 
 /// The kind of feature being placed. Kept flat for MVP —
 /// inner type enums (FurnitureType, ContainerType, etc.) deferred to Phase 8.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FeatureKind {
     /// Religious/ritual centerpiece (chapel, shrine).
     Altar,

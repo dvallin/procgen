@@ -25,12 +25,14 @@ pub trait EntityPlanner {
     /// Reads room roles/tags from [`SpatialPlan`], room positions from
     /// [`GeometryPlan`], tile walkability from [`TileMap`], and occupied
     /// cells from [`FeaturePlan`].
+    /// The `rules` slice determines which entities get spawned in which rooms.
     fn plan(
         &self,
         spatial: &SpatialPlan,
         geometry: &GeometryPlan,
         tiles: &TileMap,
         features: &FeaturePlan,
+        rules: &[EntityRule],
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError>;
 }
@@ -50,6 +52,7 @@ impl EntityPlanner for SimpleEntityPlanner {
         geometry: &GeometryPlan,
         tiles: &TileMap,
         features: &FeaturePlan,
+        rules: &[EntityRule],
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError> {
         let _span = info_span!("entity_planning", rooms = geometry.spaces.len()).entered();
@@ -77,7 +80,6 @@ impl EntityPlanner for SimpleEntityPlanner {
             map
         };
 
-        let rules = default_entity_rules();
         let mut entities = Vec::new();
 
         for placed in &geometry.spaces {
@@ -401,6 +403,7 @@ fn compute_patrol_zone(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::rules::default_entity_rules;
     use crate::feature::plan::FeaturePlacement;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
@@ -496,9 +499,10 @@ mod tests {
         };
         let features = FeaturePlan::empty();
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
             .unwrap();
 
         let archetypes: Vec<&EntityArchetypeId> =
@@ -542,9 +546,10 @@ mod tests {
         };
         let features = FeaturePlan::empty();
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
             .unwrap();
 
         let has_guardian = plan
@@ -593,9 +598,10 @@ mod tests {
                 .collect(),
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
             .unwrap();
 
         let feature_set: HashSet<Point> = feature_cells.into_iter().collect();
@@ -627,9 +633,10 @@ mod tests {
         };
         let features = FeaturePlan::empty();
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
             .unwrap();
 
         assert!(
@@ -660,9 +667,10 @@ mod tests {
         };
         let features = FeaturePlan::empty();
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &mut rng)
+            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
             .unwrap();
 
         assert!(
@@ -724,8 +732,10 @@ mod tests {
             }],
         };
         let mut rng = StdRng::seed_from_u64(42);
+        let rules = default_entity_rules();
 
-        let result = SimpleEntityPlanner.plan(&spatial, &geometry, &map, &features, &mut rng);
+        let result =
+            SimpleEntityPlanner.plan(&spatial, &geometry, &map, &features, &rules, &mut rng);
         assert!(
             result.is_err(),
             "should error when required entity can't be placed"

@@ -403,6 +403,7 @@ fn tavern_doors_connect_two_sides() {
 
 use procgen::feature::plan::FeatureKind;
 use procgen::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use procgen::feature::rules::default_rules;
 use procgen::validate::feature::{FeatureValidationInput, FeatureValidator};
 
 use rand::SeedableRng;
@@ -422,8 +423,9 @@ fn run_crypt_features() -> (
         .unwrap();
     let map = SimpleRasterizer.rasterize(&geometry).unwrap();
     let mut rng = StdRng::seed_from_u64(42);
+    let rules = default_rules();
     let features = SimpleFeaturePlanner
-        .plan(&spatial, &geometry, &map, &mut rng)
+        .plan(&spatial, &geometry, &map, &rules, &mut rng)
         .unwrap();
     (spatial, geometry, map, features)
 }
@@ -442,8 +444,9 @@ fn run_tavern_features() -> (
         .unwrap();
     let map = SimpleRasterizer.rasterize(&geometry).unwrap();
     let mut rng = StdRng::seed_from_u64(42);
+    let rules = default_rules();
     let features = SimpleFeaturePlanner
-        .plan(&spatial, &geometry, &map, &mut rng)
+        .plan(&spatial, &geometry, &map, &rules, &mut rng)
         .unwrap();
     (spatial, geometry, map, features)
 }
@@ -901,6 +904,7 @@ mod stress_tests {
 
 use procgen::entity::plan::EntityArchetypeId;
 use procgen::entity::planner::{EntityPlanner, SimpleEntityPlanner};
+use procgen::entity::rules::default_entity_rules;
 use procgen::validate::entity::{EntityValidationInput, EntityValidator};
 
 /// Helper: run the crypt pipeline through entity placement.
@@ -913,8 +917,9 @@ fn run_crypt_entities() -> (
 ) {
     let (spatial, geometry, map, features) = run_crypt_features();
     let mut rng = StdRng::seed_from_u64(42);
+    let rules = default_entity_rules();
     let entities = SimpleEntityPlanner
-        .plan(&spatial, &geometry, &map, &features, &mut rng)
+        .plan(&spatial, &geometry, &map, &features, &rules, &mut rng)
         .unwrap();
     (spatial, geometry, map, features, entities)
 }
@@ -929,8 +934,9 @@ fn run_tavern_entities() -> (
 ) {
     let (spatial, geometry, map, features) = run_tavern_features();
     let mut rng = StdRng::seed_from_u64(42);
+    let rules = default_entity_rules();
     let entities = SimpleEntityPlanner
-        .plan(&spatial, &geometry, &map, &features, &mut rng)
+        .plan(&spatial, &geometry, &map, &features, &rules, &mut rng)
         .unwrap();
     (spatial, geometry, map, features, entities)
 }
@@ -1211,4 +1217,335 @@ fn pipeline_no_seed_still_valid() {
         "pipeline without seed failed: {:?}",
         result.err()
     );
+}
+
+#[test]
+fn pipeline_with_custom_feature_rules_override() {
+    use procgen::feature::placement::PlacementStrategy;
+    use procgen::feature::rules::FeatureRule;
+
+    let situation = build_crypt_situation();
+    // Only place barrels in Hub rooms — no other features anywhere.
+    let custom_rules = vec![FeatureRule {
+        kind: FeatureKind::Barrel,
+        strategy: PlacementStrategy::WallAdjacent,
+        required: false,
+        max_count: 1,
+        match_role: Some(procgen::intent::graph::NodeRole::Hub),
+        match_archetype: None,
+        match_tag: None,
+    }];
+    let config = PipelineConfig {
+        seed: Some(42),
+        feature_rules: Some(custom_rules),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline.run(&situation, &CryptIntentBuilder).unwrap();
+
+    // All placed features should be Barrels only.
+    for f in &result.features.features {
+        assert_eq!(
+            f.kind,
+            FeatureKind::Barrel,
+            "custom rules should only produce Barrels, got: {:?}",
+            f.kind
+        );
+    }
+}
+
+#[test]
+fn pipeline_with_empty_entity_rules_produces_no_entities() {
+    let situation = build_crypt_situation();
+    let config = PipelineConfig {
+        seed: Some(42),
+        entity_rules: Some(vec![]),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline.run(&situation, &CryptIntentBuilder).unwrap();
+
+    assert!(
+        result.entities.entities.is_empty(),
+        "empty entity rules should produce no entities, got {}",
+        result.entities.entities.len()
+    );
+}
+
+// ============================================================
+// Phase 1.6: Proptest — random rules still produce valid output
+// ============================================================
+
+mod random_rules_tests {
+    use super::*;
+    use procgen::entity::plan::EntityArchetypeId;
+    use procgen::entity::rules::{EntityPlacementStrategy, EntityRule};
+    use procgen::feature::placement::PlacementStrategy;
+    use procgen::feature::plan::FeatureKind;
+    use procgen::feature::rules::FeatureRule;
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::spatial::plan::SpaceArchetype;
+    use procgen::tag::Tag;
+    use proptest::prelude::*;
+
+    /// Strategy for a random NodeRole (for rule matching).
+    fn arb_node_role() -> impl Strategy<Value = NodeRole> {
+        prop_oneof![
+            Just(NodeRole::Entry),
+            Just(NodeRole::Hub),
+            Just(NodeRole::Branch),
+            Just(NodeRole::Goal),
+            Just(NodeRole::Reward),
+            Just(NodeRole::Gate),
+            Just(NodeRole::Transition),
+        ]
+    }
+
+    /// Strategy for a random SpaceArchetype (for rule matching).
+    fn arb_archetype() -> impl Strategy<Value = SpaceArchetype> {
+        prop_oneof![
+            Just(SpaceArchetype::Hall),
+            Just(SpaceArchetype::Chamber),
+            Just(SpaceArchetype::Corridor),
+            Just(SpaceArchetype::Vestibule),
+            Just(SpaceArchetype::Vault),
+            Just(SpaceArchetype::Shaft),
+            Just(SpaceArchetype::Courtyard),
+            Just(SpaceArchetype::Workshop),
+        ]
+    }
+
+    /// Strategy for an optional tag (used in rule matching).
+    fn arb_tag() -> impl Strategy<Value = Option<Tag>> {
+        prop_oneof![
+            Just(None),
+            Just(Some(Tag::from("noble"))),
+            Just(Some(Tag::from("sealed"))),
+            Just(Some(Tag::from("barrels"))),
+            Just(Some(Tag::from("food"))),
+            Just(Some(Tag::from("smuggling"))),
+            Just(Some(Tag::from("main_goal"))),
+            Just(Some(Tag::from("locked"))),
+            Just(Some(Tag::from("contains_key"))),
+            Just(Some(Tag::from("random_tag"))),
+        ]
+    }
+
+    /// Strategy for a random FeatureKind.
+    fn arb_feature_kind() -> impl Strategy<Value = FeatureKind> {
+        prop_oneof![
+            Just(FeatureKind::Altar),
+            Just(FeatureKind::Sarcophagus),
+            Just(FeatureKind::Chest),
+            Just(FeatureKind::Barrel),
+            Just(FeatureKind::Shelf),
+            Just(FeatureKind::Table),
+            Just(FeatureKind::Trap),
+            Just(FeatureKind::Decoration("torch".into())),
+            Just(FeatureKind::Decoration("banner".into())),
+        ]
+    }
+
+    /// Strategy for a random PlacementStrategy.
+    fn arb_placement_strategy() -> impl Strategy<Value = PlacementStrategy> {
+        prop_oneof![
+            Just(PlacementStrategy::Center),
+            Just(PlacementStrategy::WallAdjacent),
+            Just(PlacementStrategy::Corner),
+            Just(PlacementStrategy::RandomFloor),
+        ]
+    }
+
+    /// Strategy for a random EntityPlacementStrategy.
+    fn arb_entity_placement() -> impl Strategy<Value = EntityPlacementStrategy> {
+        prop_oneof![
+            Just(EntityPlacementStrategy::Center),
+            Just(EntityPlacementStrategy::RandomFloor),
+            Just(EntityPlacementStrategy::NearEntrance),
+            arb_feature_kind().prop_map(EntityPlacementStrategy::NearFeature),
+        ]
+    }
+
+    /// Strategy for a random FeatureRule.
+    fn arb_feature_rule() -> impl Strategy<Value = FeatureRule> {
+        (
+            arb_feature_kind(),
+            arb_placement_strategy(),
+            any::<bool>(),
+            1u32..=4,
+            proptest::option::of(arb_node_role()),
+            proptest::option::of(arb_archetype()),
+            arb_tag(),
+        )
+            .prop_map(
+                |(kind, strategy, required, max_count, match_role, match_archetype, match_tag)| {
+                    FeatureRule {
+                        kind,
+                        strategy,
+                        required,
+                        max_count,
+                        match_role,
+                        match_archetype,
+                        match_tag,
+                    }
+                },
+            )
+    }
+
+    /// Strategy for a random EntityRule.
+    fn arb_entity_rule() -> impl Strategy<Value = EntityRule> {
+        (
+            prop_oneof![
+                Just(EntityArchetypeId::from("skeleton")),
+                Just(EntityArchetypeId::from("rat")),
+                Just(EntityArchetypeId::from("guardian")),
+                Just(EntityArchetypeId::from("ghost")),
+                Just(EntityArchetypeId::from("mimic")),
+            ],
+            arb_entity_placement(),
+            0u32..=2,
+            1u32..=4,
+            any::<bool>(),
+            proptest::option::of(arb_node_role()),
+            proptest::option::of(arb_archetype()),
+            arb_tag(),
+        )
+            .prop_map(
+                |(
+                    archetype,
+                    placement,
+                    min_count,
+                    max_count,
+                    patrol,
+                    role_match,
+                    archetype_match,
+                    tag_match,
+                )| {
+                    // Ensure min <= max
+                    let actual_min = min_count.min(max_count);
+                    let actual_max = max_count.max(min_count);
+                    EntityRule {
+                        archetype,
+                        placement,
+                        min_count: actual_min,
+                        max_count: actual_max,
+                        behavior_tags: vec![Tag::from("patrols")],
+                        patrol,
+                        role_match,
+                        archetype_match,
+                        tag_match,
+                    }
+                },
+            )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(30))]
+
+        /// Random feature rules fed into the crypt pipeline should never panic.
+        /// The pipeline may succeed or return a well-formed error.
+        #[test]
+        fn random_feature_rules_no_panic(
+            rules in proptest::collection::vec(arb_feature_rule(), 0..=10),
+            seed in 0u64..100,
+        ) {
+            let situation = build_crypt_situation();
+            let config = PipelineConfig {
+                seed: Some(seed),
+                feature_rules: Some(rules),
+                ..PipelineConfig::default()
+            };
+            let pipeline = Pipeline { config };
+            // Must not panic — either Ok or Err is fine.
+            let _ = pipeline.run(&situation, &CryptIntentBuilder);
+        }
+
+        /// Random entity rules fed into the crypt pipeline should never panic.
+        #[test]
+        fn random_entity_rules_no_panic(
+            rules in proptest::collection::vec(arb_entity_rule(), 0..=10),
+            seed in 0u64..100,
+        ) {
+            let situation = build_crypt_situation();
+            let config = PipelineConfig {
+                seed: Some(seed),
+                entity_rules: Some(rules),
+                ..PipelineConfig::default()
+            };
+            let pipeline = Pipeline { config };
+            let _ = pipeline.run(&situation, &CryptIntentBuilder);
+        }
+
+        /// Random feature AND entity rules together on the tavern pipeline.
+        #[test]
+        fn random_both_rules_tavern_no_panic(
+            feature_rules in proptest::collection::vec(arb_feature_rule(), 0..=8),
+            entity_rules in proptest::collection::vec(arb_entity_rule(), 0..=8),
+            seed in 0u64..100,
+        ) {
+            let situation = build_tavern_situation();
+            let config = PipelineConfig {
+                seed: Some(seed),
+                feature_rules: Some(feature_rules),
+                entity_rules: Some(entity_rules),
+                ..PipelineConfig::default()
+            };
+            let pipeline = Pipeline { config };
+            let _ = pipeline.run(&situation, &TavernIntentBuilder);
+        }
+
+        /// When the pipeline succeeds with random rules, validators should
+        /// not report any Error-severity issues.
+        #[test]
+        fn random_rules_success_passes_validation(
+            feature_rules in proptest::collection::vec(arb_feature_rule(), 1..=6),
+            entity_rules in proptest::collection::vec(arb_entity_rule(), 1..=6),
+            seed in 0u64..50,
+        ) {
+            let situation = build_crypt_situation();
+            let config = PipelineConfig {
+                seed: Some(seed),
+                feature_rules: Some(feature_rules),
+                entity_rules: Some(entity_rules),
+                ..PipelineConfig::default()
+            };
+            let pipeline = Pipeline { config };
+            // If the pipeline succeeds, it already passed internal validation.
+            // This test confirms no panic and that success implies valid output.
+            if let Ok(result) = pipeline.run(&situation, &CryptIntentBuilder) {
+                // Basic sanity: tiles exist
+                prop_assert!(result.tiles.width > 0);
+                prop_assert!(result.tiles.height > 0);
+                // Features placed are within tile bounds
+                for f in &result.features.features {
+                    for cell in &f.cells {
+                        prop_assert!(
+                            cell.x >= 0 && cell.x < result.tiles.width as i32,
+                            "feature cell x={} out of bounds (width={})",
+                            cell.x, result.tiles.width
+                        );
+                        prop_assert!(
+                            cell.y >= 0 && cell.y < result.tiles.height as i32,
+                            "feature cell y={} out of bounds (height={})",
+                            cell.y, result.tiles.height
+                        );
+                    }
+                }
+                // Entities placed are within tile bounds
+                for e in &result.entities.entities {
+                    prop_assert!(
+                        e.position.x >= 0 && e.position.x < result.tiles.width as i32,
+                        "entity position x={} out of bounds",
+                        e.position.x
+                    );
+                    prop_assert!(
+                        e.position.y >= 0 && e.position.y < result.tiles.height as i32,
+                        "entity position y={} out of bounds",
+                        e.position.y
+                    );
+                }
+            }
+        }
+    }
 }

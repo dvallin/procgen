@@ -8,7 +8,7 @@ A story-driven procedural generator where narrative signals steer every decision
 
 ## Where We Are
 
-The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 190 tests (property-based + integration) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility.
+The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 213 tests (property-based + integration) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phase 1 (Data-Driven Rules & Asset Loading) is complete.**
 
 ```
 SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
@@ -22,13 +22,17 @@ SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPla
 - Validators at geometry, feature, and entity levels
 - Property-based stress tests with random spatial plans
 - Two regression scenarios: Noble Crypt (lock-and-key), Tavern Cellar (branching + secret)
+- **Data-driven rules**: Feature/entity rules loaded from JSON assets (`assets/rules/`)
+- **Asset loader**: Generic `load_rules<T>()` with file + embedded fallback
+- **Pipeline rule overrides**: `PipelineConfig.feature_rules` / `.entity_rules` let callers inject custom rule sets
+- **Proptest coverage**: Random rule sets (arbitrary roles, tags, counts) never cause panics
 
 **What's missing:**
 - The `IntentBuilder` is hard-coded per scenario — no generative inference from situation
-- Rules (features, entities) are Rust code, not loaded from data files
 - Theme/variety is baked in — no vocabulary system, no atmosphere-driven selection
 - Tile types are a fixed enum — can't express game-specific terrain
 - Maps are structurally correct but narratively flat — no pacing, no tension curve
+- No world layer — rule set selection is manual (will be driven by world context in the future)
 
 ---
 
@@ -56,20 +60,22 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 ## Phased Roadmap
 
-### Phase 1: Data-Driven Rules & Asset Loading
+### Phase 1: Data-Driven Rules & Asset Loading ✅
 
 **Goal:** Extract hard-coded feature/entity rules into JSON assets. The rule engine becomes generic — rules are data, matching logic is code.
 
-| # | Task | Description |
-|---|---|---|
-| 1.1 | **FeatureRule JSON schema** | Define a JSON format for `FeatureRule`. Fields: `kind`, `strategy`, `required`, `max_count`, `match_role`, `match_archetype`, `match_tag`. Load with serde. |
-| 1.2 | **EntityRule JSON schema** | Same for `EntityRule`. Fields: `archetype`, `placement`, `min_count`, `max_count`, `behavior_tags`, `patrol`, `role_match`, `archetype_match`, `tag_match`. |
-| 1.3 | **Asset loader** | `asset::load_rules<T: DeserializeOwned>(path) -> Result<Vec<T>>`. Searches `assets/` directory. Supports both embedded (include_str!) and file-based loading. |
-| 1.4 | **Default rule assets** | Move current `default_rules()` / `default_entity_rules()` into `assets/rules/features.json` and `assets/rules/entities.json`. The Rust functions become thin loaders. |
-| 1.5 | **Pipeline accepts rule sets** | `PipelineConfig` gains optional `feature_rules` and `entity_rules` overrides. If not set, loads from default asset path. |
-| 1.6 | **Proptest: random rules still produce valid output** | Generate arbitrary rule sets (random roles, tags, counts) and assert the pipeline doesn't panic — validators catch bad placements gracefully. |
+| # | Task | Status | Description |
+|---|---|---|---|
+| 1.1 | **FeatureRule JSON schema** | ✅ | Serde derives on `FeatureRule`, `FeatureKind`, `PlacementStrategy`, `NodeRole`, `SpaceArchetype`, `Tag`. Round-trip tests. |
+| 1.2 | **EntityRule JSON schema** | ✅ | Serde derives on `EntityRule`, `EntityPlacementStrategy`, `EntityArchetypeId`. Round-trip tests. |
+| 1.3 | **Asset loader** | ✅ | `load_rules<T>()`, `load_rules_from_str<T>()`, `load_rules_with_fallback<T>()`. `AssetLoadError` with Io/Parse variants. Embedded defaults via `include_str!`. |
+| 1.4 | **Default rule assets** | ✅ | `assets/rules/features.json` (10 rules) + `assets/rules/entities.json` (7 rules). `default_rules()` functions are thin loaders. |
+| 1.5 | **Pipeline accepts rule sets** | ✅ | `PipelineConfig.feature_rules` / `.entity_rules` overrides. Planner traits accept `rules: &[Rule]` parameter. |
+| 1.6 | **Proptest: random rules** | ✅ | 4 property-based tests generate arbitrary rule sets (0–10 rules, random roles/tags/counts) and confirm no panics + valid output. |
 
-**Exit criterion:** `cargo run` produces identical output with rules loaded from JSON. Users can modify JSON and see different feature/entity behavior without recompiling.
+**Exit criterion met:** `cargo run` produces identical output with rules loaded from JSON. Users can modify JSON and see different feature/entity behavior without recompiling. Random rules never panic.
+
+**Future integration:** Rule sets are currently loaded as a pipeline-level concern (`PipelineConfig`). In the future, a **world layer** above `SituationContext` will select which rule files to load based on regional themes (e.g., undead region → `undead_crypts.json`, port city → `urban_cellars.json`). The seam is already clean — `PipelineConfig` is where a world layer injects its choices.
 
 ---
 

@@ -6,7 +6,7 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), Phase 4 (real geometry placement), Phase 5 (FeaturePlan), Phase 6 (EntityPlan), and Phase 7 (Pipeline Runner + Validation Loop) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, stress tests, feature data model, placement strategies, mapping rules, planner trait+impl, ASCII feature overlay, feature validator, entity data model, spawn rules, entity planner with patrol zones, ASCII entity overlay, entity validator, pipeline wiring, reusable Pipeline runner with PipelineConfig, seeded RNG (StdRng) threaded through planners, deterministic --seed flag, retry loop with RelaxationStrategy, and unified PipelineError all done.
+Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), Phase 4 (real geometry placement), Phase 5 (FeaturePlan), Phase 6 (EntityPlan), and Phase 7 (Pipeline Runner + Validation Loop) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, stress tests, feature data model, placement strategies, mapping rules, planner trait+impl, ASCII feature overlay, feature validator, entity data model, spawn rules, entity planner with patrol zones, ASCII entity overlay, entity validator, pipeline wiring, reusable Pipeline runner with PipelineConfig, seeded RNG (StdRng) threaded through planners, deterministic --seed flag, retry loop with RelaxationStrategy, and unified PipelineError all done. Phase 1 of the new roadmap (Data-Driven Rules & Asset Loading) is in progress — tasks 1.1–1.5 complete (JSON schemas, asset loader with embedded fallback, `default_rules()` as thin loaders, PipelineConfig accepts rule overrides).
 
 ## Pipeline (current)
 
@@ -63,6 +63,11 @@ src/
 └── asset/               # Asset loading utilities
     └── load.rs
 
+assets/
+└── rules/
+    ├── features.json    # Default feature rules (serde JSON, embedded fallback)
+    └── entities.json    # Default entity rules (serde JSON, embedded fallback)
+
 tests/
 └── integration.rs       # End-to-end pipeline tests (connectivity, overlaps, etc.)
 ```
@@ -106,7 +111,7 @@ cargo run -- --trace debug         # DEBUG-level (placement details, routing dec
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (190 currently: 142 unit/proptest + 48 integration)
+cargo test       # Runs all tests (213 currently: 157 unit/proptest + 54 integration + 2 doctests)
 ```
 
 ## Target Architecture

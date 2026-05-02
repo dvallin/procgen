@@ -3,6 +3,8 @@
 //! Defines which features belong in which rooms, driven by
 //! [`NodeRole`], [`SpaceArchetype`], and tags on the [`SpaceSpec`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::feature::placement::PlacementStrategy;
 use crate::feature::plan::FeatureKind;
 use crate::intent::graph::NodeRole;
@@ -13,7 +15,7 @@ use crate::tag::Tag;
 ///
 /// All specified criteria are ANDed — a rule with both `match_role` and
 /// `match_tag` set only fires when the space satisfies *both*.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureRule {
     /// What feature to place.
     pub kind: FeatureKind,
@@ -59,111 +61,8 @@ impl FeatureRule {
 /// before broad ones (role-only or tag-only). The planner evaluates them
 /// in order, respecting `max_count` per rule per room.
 pub fn default_rules() -> Vec<FeatureRule> {
-    vec![
-        // --- Specific: archetype + tag ---
-        // Workshop with a key → chest (the key room in crypt = Chapel Vestry,
-        // which the planner maps Goal→Vault, but the tag drives it).
-        FeatureRule {
-            kind: FeatureKind::Chest,
-            strategy: PlacementStrategy::Center,
-            required: true,
-            max_count: 1,
-            match_role: None,
-            match_archetype: None,
-            match_tag: Some(Tag::from("contains_key")),
-        },
-        // --- Role-based ---
-        // Hub rooms get a table and barrels.
-        FeatureRule {
-            kind: FeatureKind::Table,
-            strategy: PlacementStrategy::Center,
-            required: false,
-            max_count: 1,
-            match_role: Some(NodeRole::Hub),
-            match_archetype: None,
-            match_tag: None,
-        },
-        FeatureRule {
-            kind: FeatureKind::Barrel,
-            strategy: PlacementStrategy::WallAdjacent,
-            required: false,
-            max_count: 2,
-            match_role: Some(NodeRole::Hub),
-            match_archetype: None,
-            match_tag: None,
-        },
-        // Reward rooms get a chest.
-        FeatureRule {
-            kind: FeatureKind::Chest,
-            strategy: PlacementStrategy::Center,
-            required: true,
-            max_count: 1,
-            match_role: Some(NodeRole::Reward),
-            match_archetype: None,
-            match_tag: None,
-        },
-        // Entry rooms get torches.
-        FeatureRule {
-            kind: FeatureKind::Decoration("torch".into()),
-            strategy: PlacementStrategy::WallAdjacent,
-            required: false,
-            max_count: 2,
-            match_role: Some(NodeRole::Entry),
-            match_archetype: None,
-            match_tag: None,
-        },
-        // --- Archetype-based ---
-        // Vault / main_goal → sarcophagus + torches.
-        FeatureRule {
-            kind: FeatureKind::Sarcophagus,
-            strategy: PlacementStrategy::Center,
-            required: true,
-            max_count: 1,
-            match_role: None,
-            match_archetype: Some(SpaceArchetype::Vault),
-            match_tag: Some(Tag::from("main_goal")),
-        },
-        FeatureRule {
-            kind: FeatureKind::Decoration("torch".into()),
-            strategy: PlacementStrategy::WallAdjacent,
-            required: false,
-            max_count: 2,
-            match_role: None,
-            match_archetype: Some(SpaceArchetype::Vault),
-            match_tag: Some(Tag::from("main_goal")),
-        },
-        // --- Tag-driven (tavern-flavored) ---
-        // "barrels" tag → extra barrels.
-        FeatureRule {
-            kind: FeatureKind::Barrel,
-            strategy: PlacementStrategy::WallAdjacent,
-            required: false,
-            max_count: 2,
-            match_role: None,
-            match_archetype: None,
-            match_tag: Some(Tag::from("barrels")),
-        },
-        // "food" tag → shelf.
-        FeatureRule {
-            kind: FeatureKind::Shelf,
-            strategy: PlacementStrategy::WallAdjacent,
-            required: false,
-            max_count: 2,
-            match_role: None,
-            match_archetype: None,
-            match_tag: Some(Tag::from("food")),
-        },
-        // "smuggling" tag → hidden chest.
-        FeatureRule {
-            kind: FeatureKind::Chest,
-            strategy: PlacementStrategy::Corner,
-            required: false,
-            max_count: 1,
-            match_role: None,
-            match_archetype: None,
-            match_tag: Some(Tag::from("smuggling")),
-        },
-    ]
+    crate::asset::load::load_default_feature_rules()
+        .expect("embedded feature rules are valid JSON (compile-time guarantee)")
 }
 
 /// Returns only the rules that match a given space.
@@ -292,5 +191,56 @@ mod tests {
             "a plain gate/vestibule with only 'locked' tag should match no feature rules, got: {:?}",
             matched.iter().map(|r| &r.kind).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn serde_round_trip_default_rules() {
+        let rules = default_rules();
+        let json = serde_json::to_string_pretty(&rules).unwrap();
+        let deserialized: Vec<FeatureRule> = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(rules.len(), deserialized.len());
+        for (orig, deser) in rules.iter().zip(deserialized.iter()) {
+            assert_eq!(orig.kind, deser.kind);
+            assert_eq!(orig.strategy, deser.strategy);
+            assert_eq!(orig.required, deser.required);
+            assert_eq!(orig.max_count, deser.max_count);
+            assert_eq!(orig.match_role, deser.match_role);
+            assert_eq!(orig.match_archetype, deser.match_archetype);
+            assert_eq!(orig.match_tag, deser.match_tag);
+        }
+    }
+
+    #[test]
+    fn serde_round_trip_from_json_file() {
+        let json = include_str!("../../assets/rules/features.json");
+        let rules: Vec<FeatureRule> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(rules.len(), default_rules().len());
+        // Verify a known rule deserialized correctly.
+        let sarcophagus_rule = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
+        assert!(sarcophagus_rule.is_some(), "should find sarcophagus rule");
+        let rule = sarcophagus_rule.unwrap();
+        assert!(rule.required);
+        assert_eq!(rule.match_archetype, Some(SpaceArchetype::Vault));
+        assert_eq!(rule.match_tag, Some(Tag::from("main_goal")));
+    }
+
+    #[test]
+    fn serde_decoration_variant_round_trips() {
+        let rule = FeatureRule {
+            kind: FeatureKind::Decoration("banner".into()),
+            strategy: PlacementStrategy::WallAdjacent,
+            required: false,
+            max_count: 3,
+            match_role: Some(NodeRole::Hub),
+            match_archetype: None,
+            match_tag: Some(Tag::from("noble")),
+        };
+        let json = serde_json::to_string(&rule).unwrap();
+        let deser: FeatureRule = serde_json::from_str(&json).unwrap();
+        assert_eq!(deser.kind, FeatureKind::Decoration("banner".into()));
+        assert_eq!(deser.match_role, Some(NodeRole::Hub));
+        assert_eq!(deser.match_tag, Some(Tag::from("noble")));
     }
 }

@@ -13,8 +13,10 @@ use tracing::{debug, info, info_span, warn};
 
 use crate::entity::plan::{EntityPlan, EntityPlanError};
 use crate::entity::planner::{EntityPlanner, SimpleEntityPlanner};
+use crate::entity::rules::EntityRule;
 use crate::feature::plan::{FeaturePlan, FeaturePlanError};
 use crate::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use crate::feature::rules::FeatureRule;
 use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
     GeometryPlanError, GeometryPlanner, PlacementConfig, SimpleGeometryPlanner,
@@ -56,6 +58,10 @@ pub struct PipelineConfig {
     pub relaxation: RelaxationStrategy,
     /// Optional seed for deterministic generation. If `None`, a random seed is used.
     pub seed: Option<u64>,
+    /// Optional feature rules override. If `None`, loads from the default asset path.
+    pub feature_rules: Option<Vec<FeatureRule>>,
+    /// Optional entity rules override. If `None`, loads from the default asset path.
+    pub entity_rules: Option<Vec<EntityRule>>,
 }
 
 impl Default for PipelineConfig {
@@ -64,6 +70,8 @@ impl Default for PipelineConfig {
             max_retries: 3,
             relaxation: RelaxationStrategy::IncreaseSpacing { step: 2 },
             seed: None,
+            feature_rules: None,
+            entity_rules: None,
         }
     }
 }
@@ -246,20 +254,39 @@ impl Pipeline {
         // ── 3. Geometry planning (retry loop) ──────────────────────────
         let geometry = self.plan_geometry_with_retries(&spatial)?;
 
-        // ── 4. Rasterisation ───────────────────────────────────────────
+        // ── 4. Rasterisation ───────────────────────────────────────
         info!("rasterising tiles");
         let tiles = SimpleRasterizer.rasterize(&geometry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
 
+        // ── Resolve rule sets ──────────────────────────────────────────
+        let feature_rules = match &self.config.feature_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_feature_rules()
+                .expect("embedded feature rules are valid JSON"),
+        };
+        let entity_rules = match &self.config.entity_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_entity_rules()
+                .expect("embedded entity rules are valid JSON"),
+        };
+
         // ── 5. Feature planning + validation ───────────────────────────
         info!("planning features");
-        let features = SimpleFeaturePlanner.plan(&spatial, &geometry, &tiles, &mut rng)?;
+        let features =
+            SimpleFeaturePlanner.plan(&spatial, &geometry, &tiles, &feature_rules, &mut rng)?;
         self.validate_features(&features, &tiles, &geometry, &spatial)?;
 
         // ── 6. Entity planning + validation ───────────────────────────
         info!("planning entities");
-        let entities =
-            SimpleEntityPlanner.plan(&spatial, &geometry, &tiles, &features, &mut rng)?;
+        let entities = SimpleEntityPlanner.plan(
+            &spatial,
+            &geometry,
+            &tiles,
+            &features,
+            &entity_rules,
+            &mut rng,
+        )?;
         self.validate_entities(&entities, &features, &tiles, &geometry, &spatial)?;
 
         info!("pipeline complete");
@@ -442,6 +469,8 @@ mod tests {
         let cfg = PipelineConfig::default();
         assert_eq!(cfg.max_retries, 3);
         assert!(cfg.seed.is_none());
+        assert!(cfg.feature_rules.is_none());
+        assert!(cfg.entity_rules.is_none());
         match &cfg.relaxation {
             RelaxationStrategy::IncreaseSpacing { step } => assert_eq!(*step, 2),
             RelaxationStrategy::None => panic!("expected IncreaseSpacing"),
@@ -455,6 +484,8 @@ mod tests {
                 max_retries: 1,
                 relaxation: RelaxationStrategy::None,
                 seed: None,
+                feature_rules: None,
+                entity_rules: None,
             },
         };
         let base = PlacementConfig::default();
@@ -470,6 +501,8 @@ mod tests {
                 max_retries: 5,
                 relaxation: RelaxationStrategy::IncreaseSpacing { step: 3 },
                 seed: None,
+                feature_rules: None,
+                entity_rules: None,
             },
         };
         let base = PlacementConfig {
