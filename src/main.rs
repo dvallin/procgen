@@ -1,31 +1,53 @@
+use clap::{Parser, ValueEnum};
+
 use procgen::demo::crypt::{CryptIntentBuilder, build_crypt_situation};
 use procgen::demo::tavern::{TavernIntentBuilder, build_tavern_situation};
-use procgen::intent::builder::IntentBuilder;
-use procgen::spatial::planner::SpatialPlanner;
-use procgen::tile::rasterize::Rasterizer;
+use procgen::pipeline::{Pipeline, PipelineConfig};
+use procgen::tile::ascii::render_ascii_with_entities;
 use tracing_subscriber::EnvFilter;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
+/// Procedural dungeon generator.
+#[derive(Parser)]
+#[command(name = "procgen", version, about)]
+struct Cli {
+    /// Scenario to generate.
+    #[arg(default_value = "crypt")]
+    scenario: Scenario,
 
-    // Parse --trace flag: --trace (INFO), --trace=debug (DEBUG), --trace=all (TRACE)
-    let trace_level = args.iter().find_map(|a| {
-        if a == "--trace" {
-            Some("info")
-        } else if let Some(level) = a.strip_prefix("--trace=") {
-            Some(match level {
-                "debug" => "debug",
-                "all" | "trace" => "trace",
-                _ => "info",
-            })
-        } else {
-            None
-        }
-    });
+    /// Seed for deterministic generation.
+    #[arg(long)]
+    seed: Option<u64>,
 
-    if let Some(level) = trace_level {
+    /// Enable tracing output (to stderr).
+    #[arg(long, default_missing_value = "info", num_args = 0..=1)]
+    trace: Option<TraceLevel>,
+}
+
+#[derive(Clone, ValueEnum)]
+enum Scenario {
+    Crypt,
+    Tavern,
+}
+
+#[derive(Clone, ValueEnum)]
+enum TraceLevel {
+    Info,
+    Debug,
+    All,
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    // Initialise tracing if requested.
+    if let Some(level) = &cli.trace {
+        let level_str = match level {
+            TraceLevel::Info => "info",
+            TraceLevel::Debug => "debug",
+            TraceLevel::All => "trace",
+        };
         let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(format!("procgen={level}")));
+            .unwrap_or_else(|_| EnvFilter::new(format!("procgen={level_str}")));
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(false)
@@ -33,51 +55,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .init();
     }
 
-    // Find the scenario name (first arg that doesn't start with --)
-    let scenario = args
-        .iter()
-        .skip(1)
-        .find(|a| !a.starts_with("--"))
-        .map(|s| s.as_str())
-        .unwrap_or("crypt");
+    let config = PipelineConfig {
+        seed: cli.seed,
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
 
-    match scenario {
-        "crypt" => run_crypt()?,
-        "tavern" => run_tavern()?,
-        other => {
-            eprintln!("Unknown scenario: {other}");
-            eprintln!("Available: crypt, tavern");
+    let result = match cli.scenario {
+        Scenario::Crypt => {
+            let situation = build_crypt_situation();
+            println!("=== Noble Crypt ===\n");
+            pipeline.run(&situation, &CryptIntentBuilder)
+        }
+        Scenario::Tavern => {
+            let situation = build_tavern_situation();
+            println!("=== Tavern Cellar ===\n");
+            pipeline.run(&situation, &TavernIntentBuilder)
+        }
+    };
+
+    match result {
+        Ok(r) => {
+            println!(
+                "{}",
+                render_ascii_with_entities(&r.tiles, &r.features, &r.entities)
+            );
+        }
+        Err(e) => {
+            eprintln!("Pipeline error: {e}");
             std::process::exit(1);
         }
     }
-
-    Ok(())
-}
-
-fn run_crypt() -> Result<(), Box<dyn std::error::Error>> {
-    let situation = build_crypt_situation();
-    let intent = CryptIntentBuilder.build(&situation)?;
-
-    let spatial_plan = procgen::spatial::planner::SimpleSpatialPlanner.plan(&intent)?;
-    let geometry = procgen::geometry::planner::SimpleGeometryPlanner::default()
-        .plan_with_validation(&spatial_plan)?;
-    let map = procgen::tile::rasterize::SimpleRasterizer.rasterize(&geometry)?;
-
-    println!("=== Noble Crypt ===\n");
-    println!("{}", procgen::tile::ascii::render_ascii(&map));
-    Ok(())
-}
-
-fn run_tavern() -> Result<(), Box<dyn std::error::Error>> {
-    let situation = build_tavern_situation();
-    let intent = TavernIntentBuilder.build(&situation)?;
-
-    let spatial_plan = procgen::spatial::planner::SimpleSpatialPlanner.plan(&intent)?;
-    let geometry = procgen::geometry::planner::SimpleGeometryPlanner::default()
-        .plan_with_validation(&spatial_plan)?;
-    let map = procgen::tile::rasterize::SimpleRasterizer.rasterize(&geometry)?;
-
-    println!("=== Tavern Cellar ===\n");
-    println!("{}", procgen::tile::ascii::render_ascii(&map));
-    Ok(())
 }

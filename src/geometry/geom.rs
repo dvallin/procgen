@@ -181,6 +181,17 @@ impl Rect {
         }
     }
 
+    /// Returns an iterator over all `Point`s in this rect, row by row (top to bottom, left to right).
+    pub fn iter_points(&self) -> RectPointIter {
+        RectPointIter {
+            x: self.x,
+            y: self.y,
+            start_x: self.x,
+            end_x: self.x + self.w,
+            end_y: self.y + self.h,
+        }
+    }
+
     /// Does an axis-aligned segment pass through the strict interior of this rect?
     /// "Interior" excludes the boundary cells. Returns false for rects thinner
     /// than 3 in either dimension (no interior exists).
@@ -219,6 +230,48 @@ impl Rect {
         }
     }
 }
+
+/// Iterator over all [`Point`]s inside a [`Rect`], row by row.
+pub struct RectPointIter {
+    x: i32,
+    y: i32,
+    start_x: i32,
+    end_x: i32,
+    end_y: i32,
+}
+
+impl Iterator for RectPointIter {
+    type Item = Point;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.y >= self.end_y {
+            return None;
+        }
+        let p = Point {
+            x: self.x,
+            y: self.y,
+        };
+        self.x += 1;
+        if self.x >= self.end_x {
+            self.x = self.start_x;
+            self.y += 1;
+        }
+        Some(p)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.y >= self.end_y {
+            return (0, Some(0));
+        }
+        let remaining_in_row = (self.end_x - self.x) as usize;
+        let remaining_full_rows = (self.end_y - self.y - 1) as usize;
+        let row_width = (self.end_x - self.start_x) as usize;
+        let total = remaining_in_row + remaining_full_rows * row_width;
+        (total, Some(total))
+    }
+}
+
+impl ExactSizeIterator for RectPointIter {}
 
 /// The shape of a placed space.
 #[derive(Debug, Clone, PartialEq, Eq)]

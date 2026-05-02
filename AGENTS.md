@@ -6,23 +6,24 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), and Phase 4 (real geometry placement) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, and stress tests all done.
+Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), Phase 4 (real geometry placement), Phase 5 (FeaturePlan), Phase 6 (EntityPlan), and Phase 7 (Pipeline Runner + Validation Loop) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, stress tests, feature data model, placement strategies, mapping rules, planner trait+impl, ASCII feature overlay, feature validator, entity data model, spawn rules, entity planner with patrol zones, ASCII entity overlay, entity validator, pipeline wiring, reusable Pipeline runner with PipelineConfig, seeded RNG (StdRng) threaded through planners, deterministic --seed flag, retry loop with RelaxationStrategy, and unified PipelineError all done.
 
 ## Pipeline (current)
 
 ```
-SituationContext → MapIntent → SpatialPlan → GeometryPlan → TileMap → ASCII
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
 ```
 
-Each stage is behind a trait (`IntentBuilder`, `SpatialPlanner`, `GeometryPlanner`, `Rasterizer`) with a simple default implementation.
+Each stage is behind a trait (`IntentBuilder`, `SpatialPlanner`, `GeometryPlanner`, `Rasterizer`, `FeaturePlanner`, `EntityPlanner`) with a simple default implementation. The `Pipeline` struct orchestrates all stages with retry semantics and seeded RNG.
 
 ## Module Layout
 
 ```
 src/
-├── main.rs              # CLI entry point, runs the full pipeline
+├── main.rs              # CLI entry point, thin wrapper around Pipeline::run
 ├── lib.rs               # Crate root, re-exports modules
 ├── tag.rs               # Tag newtype (wraps String)
+├── pipeline.rs          # Pipeline runner, PipelineConfig, PipelineError, retry loop + seeded RNG
 ├── demo/                # Hardcoded demo scenarios
 │   ├── crypt.rs         # Noble crypt: situation → intent → pipeline
 │   └── tavern.rs        # Tavern cellar: different topology + archetypes
@@ -38,17 +39,27 @@ src/
 │   ├── plan.rs          # SpatialPlan, SpaceSpec, SpaceLink, SpaceArchetype, SizeHint, SpatialConstraint
 │   └── planner.rs       # MapIntent → SpatialPlan (trait + impl + resolve_dimensions + proptest)
 ├── geometry/            # Concrete geometry placement
-│   ├── geom.rs          # Point, Rect, Footprint, PlacedSpace, GeometryPlan
+│   ├── geom.rs          # Point, Rect, RectPointIter, Footprint, PlacedSpace, GeometryPlan
 │   ├── planner.rs       # SpatialPlan → GeometryPlan (BFS layout + constraint-aware placement)
 │   └── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
 ├── tile/                # Tile-level rasterization
 │   ├── map.rs           # TileMap, Tile enum, flood_fill
 │   ├── rasterize.rs     # GeometryPlan → TileMap (trait + impl + proptest)
-│   └── ascii.rs         # TileMap → String debug rendering
-├── feature/             # Feature placement (stub)
-├── entity/              # Entity placement (stub)
+│   └── ascii.rs         # TileMap → String debug rendering (+ feature + entity overlay)
+├── feature/             # Feature placement
+│   ├── plan.rs          # FeaturePlan, FeaturePlacement, FeatureKind, FeaturePlanError
+│   ├── placement.rs     # PlacementStrategy enum + tile-finding helpers
+│   ├── rules.rs         # FeatureRule, default_rules(), matching_rules()
+│   └── planner.rs       # FeaturePlanner trait + SimpleFeaturePlanner impl
+├── entity/              # Entity placement
+│   ├── plan.rs          # EntityPlan, EntityPlacement, EntityArchetypeId, EntityPlanError
+│   ├── rules.rs         # EntityRule, EntityPlacementStrategy, default_entity_rules(), matching_entity_rules()
+│   └── planner.rs       # EntityPlanner trait + SimpleEntityPlanner impl
 ├── validate/            # Validation traits
-│   └── mod.rs           # Validator<T> trait, Severity, ValidationResult
+│   ├── mod.rs           # Validator<T> trait, Severity, ValidationResult
+│   ├── geometry.rs      # GeometryValidator
+│   ├── feature.rs       # FeatureValidator
+│   └── entity.rs        # EntityValidator
 └── asset/               # Asset loading utilities
     └── load.rs
 
@@ -86,13 +97,16 @@ These live on the types they belong to — no separate utility module:
 ## Running
 
 ```sh
-cargo run        # Prints ASCII map (default: crypt)
-cargo run -- tavern  # Prints tavern cellar map
-cargo run -- crypt --trace          # INFO-level pipeline trace (to stderr)
-cargo run -- crypt --trace=debug    # DEBUG-level (placement details, routing decisions)
-cargo run -- crypt --trace=all      # TRACE-level (everything)
-RUST_LOG=procgen=debug cargo run -- crypt --trace  # Override via env var
-cargo test       # Runs all tests (103 currently: 81 unit/proptest + 22 integration)
+cargo run                          # Prints ASCII map (default: crypt)
+cargo run -- tavern                # Prints tavern cellar map
+cargo run -- --seed 42             # Deterministic generation with seed
+cargo run -- crypt --seed 42       # Explicit scenario + seed
+cargo run -- --trace               # INFO-level pipeline trace (to stderr)
+cargo run -- --trace debug         # DEBUG-level (placement details, routing decisions)
+cargo run -- --trace all           # TRACE-level (everything)
+cargo run -- --help                # Show CLI usage
+RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
+cargo test       # Runs all tests (190 currently: 142 unit/proptest + 48 integration)
 ```
 
 ## Target Architecture

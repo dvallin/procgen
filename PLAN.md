@@ -1,504 +1,280 @@
-# PLAN.md — Architecture Evolution Plan
+# PLAN.md — Roadmap
 
 ## Vision
 
-Evolve the current thin vertical slice into a layered procedural generation pipeline where each layer has clear contracts, swappable implementations, and validation hooks that enable iterative refinement.
+A story-driven procedural generator where narrative signals steer every decision. Given a `SituationContext` ("sealed crypt, noble family, locked vault"), the system infers structure, materializes themed rooms, places narratively appropriate features and entities, and produces a map that feels *designed* — with pacing, tension, and coherence — without any hand-authored graph.
 
 ---
 
-## Target Architecture
+## Where We Are
+
+The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 190 tests (property-based + integration) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility.
 
 ```
-SituationContext
-│   narrative tags, world bindings
-│   "port town house, rat infestation, dock district"
-│
-▼
-MapIntent
-│   location_kind, scale, required_spaces, structural_graph
-│   constraints, motifs
-│
-▼
-SpatialPlan
-│   abstract spaces: roles, archetypes, size_hints
-│   links: traversal semantics
-│   spatial constraints: adjacency, separation, ordering
-│
-├─────────────────────────────┐
-▼                             ▼
-GeometryPlan                  │  (consumes SpatialPlan + MapIntent)
-│   placed spaces with        │
-│   footprints (rect, cells,  │
-│   composite)                │
-│   placed links as polylines │
-│                             │
-▼                             │
-TileMap  ◄────────────────────┘  (consumes GeometryPlan)
-│   2D grid: floor, wall, door, void, water, ...
-│
-▼
-FeaturePlan (consumes: MapIntent + GeometryPlan + TileMap)
-│   furniture, traps, decorations, interactables
-│   placed with footprints + anchors + tags
-│
-▼
-EntityPlan (consumes: FeaturePlan + TileMap + MapIntent)
-│   NPCs, monsters, items, triggers
-│   positioned with behavior tags
-│
-▼
-Validation (consumes: all outputs)
-│   connectivity, reachability, density, pacing
-│   failure → adjust constraints → rerun affected layers
-│
-▼
-Presentation / Debug / Export
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
+```
+
+**What works:**
+- Full pipeline runner with retry semantics and seeded RNG
+- Geometry placement with constraint-aware layout and corridor routing
+- Feature placement (furniture, traps, decorations) driven by role/tag rules
+- Entity placement (monsters, NPCs) with patrol zones and safe entry rooms
+- Validators at geometry, feature, and entity levels
+- Property-based stress tests with random spatial plans
+- Two regression scenarios: Noble Crypt (lock-and-key), Tavern Cellar (branching + secret)
+
+**What's missing:**
+- The `IntentBuilder` is hard-coded per scenario — no generative inference from situation
+- Rules (features, entities) are Rust code, not loaded from data files
+- Theme/variety is baked in — no vocabulary system, no atmosphere-driven selection
+- Tile types are a fixed enum — can't express game-specific terrain
+- Maps are structurally correct but narratively flat — no pacing, no tension curve
+
+---
+
+## Design Boundary: Types vs. Data
+
+A core tension in this system: what stays as Rust enums/traits (compile-time, exhaustive) vs. what becomes data-driven (runtime, open-ended)?
+
+**Stays typed (structural contracts):**
+- `NodeRole` — the finite set of *structural functions* a room can serve (Entry, Hub, Gate, Goal, Reward, Branch, Transition). These are architectural concepts, not content.
+- `EdgeRole` — traversal semantics determine corridor generation logic.
+- Pipeline traits (`IntentBuilder`, `SpatialPlanner`, etc.) — the layer boundaries.
+- `Severity` — validators need exhaustive match arms.
+- `Tile` — *for now*. See Phase 3 for the path to data-driven tiles.
+
+**Becomes data (content/variety):**
+- Feature/entity rules — which features spawn in which rooms, driven by tags
+- Theme vocabularies — labels, tags, atmosphere, archetype selection per theme
+- Narrative patterns — reusable graph structures (lock-and-key, hub-and-spoke)
+- Room templates — pre-designed interior layouts for specific archetype+theme combos
+- Tile palettes — *eventually*. A "tile registry" maps tile IDs to properties (walkable, opaque, ASCII char). But the MVP can keep the enum.
+
+**The heuristic:** If adding a new *kind* of X requires changing match arms in multiple files, X should probably be data. If X determines which *code path* executes, it should stay typed.
+
+---
+
+## Phased Roadmap
+
+### Phase 1: Data-Driven Rules & Asset Loading
+
+**Goal:** Extract hard-coded feature/entity rules into JSON assets. The rule engine becomes generic — rules are data, matching logic is code.
+
+| # | Task | Description |
+|---|---|---|
+| 1.1 | **FeatureRule JSON schema** | Define a JSON format for `FeatureRule`. Fields: `kind`, `strategy`, `required`, `max_count`, `match_role`, `match_archetype`, `match_tag`. Load with serde. |
+| 1.2 | **EntityRule JSON schema** | Same for `EntityRule`. Fields: `archetype`, `placement`, `min_count`, `max_count`, `behavior_tags`, `patrol`, `role_match`, `archetype_match`, `tag_match`. |
+| 1.3 | **Asset loader** | `asset::load_rules<T: DeserializeOwned>(path) -> Result<Vec<T>>`. Searches `assets/` directory. Supports both embedded (include_str!) and file-based loading. |
+| 1.4 | **Default rule assets** | Move current `default_rules()` / `default_entity_rules()` into `assets/rules/features.json` and `assets/rules/entities.json`. The Rust functions become thin loaders. |
+| 1.5 | **Pipeline accepts rule sets** | `PipelineConfig` gains optional `feature_rules` and `entity_rules` overrides. If not set, loads from default asset path. |
+| 1.6 | **Proptest: random rules still produce valid output** | Generate arbitrary rule sets (random roles, tags, counts) and assert the pipeline doesn't panic — validators catch bad placements gracefully. |
+
+**Exit criterion:** `cargo run` produces identical output with rules loaded from JSON. Users can modify JSON and see different feature/entity behavior without recompiling.
+
+---
+
+### Phase 2: Narrative Patterns & Intent Generation
+
+**Goal:** Replace hard-coded `IntentBuilder` fixtures with a generative system that infers a `ScenarioGraph` from situation tags.
+
+| # | Task | Description |
+|---|---|---|
+| 2.1 | **NarrativePattern data model** | A pattern is a parameterized graph template: named slots with role constraints, edges with traversal types, metadata (what tags vote for this pattern). JSON-serializable. |
+| 2.2 | **Pattern library** | 4–5 starter patterns: "lock-and-key" (Entry→Hub→Gate→Goal + optional branches), "branching-exploration" (Hub with N spokes), "linear-descent" (chain of increasing danger), "hub-and-spoke" (central hub, radiating paths), "gauntlet" (linear + gates). |
+| 2.3 | **Pattern Selector** | Situation tags have weighted votes for patterns. `locked_vault` → lock-and-key (+3). `open_cavern` → hub-and-spoke (+2). Highest-scoring pattern wins (with RNG tiebreaking). |
+| 2.4 | **Theme Vocabulary** | Data model: maps `(role, theme_binding)` → list of `{label, tags, archetype}` tuples. E.g. theme `undead_nobility`: Hub → ("Great Hall", [noble, sealed], Hall). JSON asset. |
+| 2.5 | **Slot Filler** | Given a pattern + vocabulary, instantiate each slot: pick a vocabulary entry matching the slot's role, assign label/tags/archetype. RNG for variety across runs. |
+| 2.6 | **Constraint Inference** | Pattern metadata declares constraint shapes. Lock-and-key → emit `MustGate`. Hub-and-spoke with required spoke → emit `MustConnect`. |
+| 2.7 | **GenericIntentBuilder** | Implement `IntentBuilder` using selector + filler + constraint inference. One builder for all situations. |
+| 2.8 | **Regression tests** | Given crypt/tavern situations, `GenericIntentBuilder` produces graphs with the same structural shape (same role counts, same edge types) as the fixtures. |
+
+**Design decisions:**
+- Patterns are *topological*, not geometric. They define what connects to what, not where.
+- Theme vocabularies are the primary variety knob. Adding a scenario = adding vocabulary entries + situation tags.
+- Existing demo fixtures (`CryptIntentBuilder`, `TavernIntentBuilder`) remain as regression baselines — they're never deleted.
+
+**Exit criterion:** `cargo run` with a `GenericIntentBuilder` + crypt situation produces a valid, thematically coherent dungeon indistinguishable in quality from the fixture version.
+
+---
+
+### Phase 3: Tile Registry & Data-Driven Rasterization
+
+**Goal:** Break the hard-coded `Tile` enum into a registry-based system so game-specific terrain can be defined in data.
+
+| # | Task | Description |
+|---|---|---|
+| 3.1 | **TileId newtype** | `TileId(u16)` — a lightweight handle into the tile registry. `TileMap` stores `Vec<TileId>` instead of `Vec<Tile>`. |
+| 3.2 | **TileRegistry** | Maps `TileId` → `TileProperties { name, walkable, opaque, ascii_char, tags }`. Loaded from JSON. Built-in defaults cover the current enum variants. |
+| 3.3 | **Migrate Tile enum → TileId** | `Tile::Floor` becomes `TileId(1)` etc. All code that pattern-matches on `Tile` now queries registry properties (`registry.is_walkable(id)`). |
+| 3.4 | **Rasterizer uses registry** | `SimpleRasterizer` receives `&TileRegistry` (via pipeline config or trait method). Places `TileId`s instead of enum variants. |
+| 3.5 | **Extended tile palette** | Add tiles for Water, Pit, Stairs, Rubble, Grass — each with properties. Demonstrate in a new "cave" scenario context. |
+| 3.6 | **ASCII renderer uses registry** | `render_ascii` queries `TileRegistry` for the display character instead of matching an enum. |
+| 3.7 | **Backward compat** | Keep a convenience `Tile` enum as a named constant set (like `Tile::FLOOR -> TileId(1)`) so existing tests don't break catastrophically. |
+
+**Design decisions:**
+- `NodeRole` and `EdgeRole` do NOT get this treatment — they determine which *code path* runs (corridor routing, entry room entity skip, etc.). They stay as enums.
+- `TileId` is tiny (u16) and Copy — no performance regression vs. the enum.
+- The registry is a game-level concern: different games using this generator can define different tile sets.
+- Feature/entity placement strategies query `registry.is_walkable(tile)` instead of matching enum variants.
+
+**Exit criterion:** Current demos produce identical ASCII output. A new tile type can be added with zero Rust code changes — just a JSON entry.
+
+---
+
+### Phase 4: Narrative Room Character & Atmosphere
+
+**Goal:** Rooms feel different based on narrative context, not just structural role.
+
+| # | Task | Description |
+|---|---|---|
+| 4.1 | **Atmosphere tags on SpaceSpec** | Add `atmosphere: Vec<Tag>` to `SpaceSpec`. Populated by the slot filler from theme vocabulary (e.g. theme "damp_cellar" → atmosphere: [musty, dripping]). |
+| 4.2 | **Feature rules conditioned on atmosphere** | `FeatureRule` gains `match_atmosphere: Option<Tag>`. "damp" rooms get puddle decorations, "arcane" rooms get glowing runes. |
+| 4.3 | **Entity rules conditioned on atmosphere/motif** | `EntityRule` gains `match_motif: Option<MotifId>`. Motif "timber" → rats more likely; motif "gothic" → undead more likely. |
+| 4.4 | **Room size by narrative importance** | Rooms tagged `main_goal` or `climax` get larger `SizeHint`. Optional/branch rooms get smaller. Spatial planner reads these tags. |
+| 4.5 | **Room templates (prefab interiors)** | For specific `(archetype, theme)` combos, provide a pre-designed feature layout as a JSON template. E.g. "library" archetype + "arcane" theme → shelves along walls, desk at center. Template interiors override rule-based placement for that room. |
+| 4.6 | **New Scenario: Wizard's Tower** | 3–4 vertical levels connected by shafts. Tests `VerticalTraversal`, `Shaft` archetype, arcane theme vocabulary. Proves the system handles non-dungeon structures. |
+
+**Exit criterion:** Three scenarios (crypt, tavern, tower) with visibly different room character. Room templates work for at least one archetype.
+
+---
+
+### Phase 5: Pacing, Composition & Scale
+
+**Goal:** Generate larger maps with narrative pacing — buildup, climax, release.
+
+| # | Task | Description |
+|---|---|---|
+| 5.1 | **Pattern Composition** | A slot in one pattern can expand into a sub-pattern. `MapScale` controls expansion budget: Tiny=1 pattern, Small=1+1 expansion, Medium=1+2, Large=recursive. |
+| 5.2 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry. Tag rooms with `tension: low/medium/high/climax`. |
+| 5.3 | **Tension-aware entity density** | Entity rules gain `match_tension: Option<TensionLevel>`. High-tension rooms get more/harder entities. Low-tension rooms stay sparse. |
+| 5.4 | **Rest points** | If critical path length > N, insert a `Reward`-role room mid-path (safe, contains supplies). Pattern-level insertion. |
+| 5.5 | **Pacing validator** | Warns if the tension curve is flat (boring), immediately maxed (unfair), or has no climax before the goal. |
+| 5.6 | **New Scenario: Abandoned Mine** | Medium-scale (10–15 rooms). Main shaft (linear descent) + branching galleries (hub-and-spoke at depth). Tests pattern composition + pacing over a longer path. |
+
+**Exit criterion:** Medium-scale maps have measurable pacing curves visible in `--trace` output. Validator catches degenerate structures.
+
+---
+
+### Phase 6: Algorithmic Depth (scenario-driven)
+
+**Goal:** Improve generation quality at individual layers, motivated by concrete scenario needs.
+
+| Scenario Need | Layer | Approach |
+|---|---|---|
+| Caves feel rectangular | Geometry | Cellular automata / irregular polygons for `Cave` LocationKind |
+| Corridors are monotonous | Routing | A* with cost maps; wider corridors for Hall connections |
+| Furniture feels random | Features | Template interiors (Phase 4.5) for more room types |
+| No encounter design | Entities | Encounter budgets per room (difficulty ≤ tension × budget) |
+| Can't detect boring maps | Validation | Branching factor check, dead-end density, reachability analysis |
+| Tower needs vertical movement | Geometry | Multi-level support: `PlacedSpace` gains `z_level`, stairwell routing |
+
+**Priority is driven by which new scenario needs it.** No algorithm work happens without a scenario that exercises it.
+
+---
+
+### Scenario Roadmap
+
+| Scenario | Key Tests | Unlocked by |
+|---|---|---|
+| Noble Crypt | lock-and-key, undead theme | Foundation ✅ |
+| Tavern Cellar | branching, urban theme, secrets | Foundation ✅ |
+| Wizard's Tower | vertical traversal, arcane theme, multi-level | Phase 4 |
+| Abandoned Mine | pattern composition, medium scale, natural | Phase 5 |
+| Thieves' Guild | complex hub-and-spoke, traps, NPC dialogue | Phase 5 |
+| Dragon's Lair | large scale, encounter budgets, boss room | Phase 6 |
+
+---
+
+## Architecture Reference
+
+### Pipeline Data Flow
+
+```
+SituationContext            (narrative tags + bindings)
+    │
+    ▼
+MapIntent                   (structural graph, scale, constraints, motifs)
+    │
+    ▼
+SpatialPlan                 (abstract spaces + links + size hints)
+    │
+    ▼
+GeometryPlan                (placed rects + corridor polylines)
+    │
+    ▼
+TileMap                     (2D grid of TileIds)
+    │
+    ▼
+FeaturePlan                 (placed furniture/traps/decorations)
+    │
+    ▼
+EntityPlan                  (placed monsters/NPCs with behavior)
+    │
+    ▼
+Validation → retry loop if errors
+    │
+    ▼
+ASCII / Export
+```
+
+### Key Types (structural — stay as enums)
+
+```rust
+enum NodeRole    { Entry, Hub, Gate, Goal, Reward, Branch, Transition }
+enum EdgeRole    { Traversal, OptionalTraversal, RestrictedTraversal, SecretTraversal, VerticalTraversal }
+enum Severity    { Error, Warning, Info }
+```
+
+### Key Types (content — becoming data-driven)
+
+```rust
+// Currently enums, migrating to data:
+enum FeatureKind { Furniture, Container, Trap, Decoration, Interactable }  // → JSON rules
+enum Tile        { Void, Floor, Wall, Door, LockedDoor }                   // → TileRegistry (Phase 3)
+
+// Already data-driven (string newtypes):
+struct Tag(String)
+struct EntityArchetypeId(String)
+struct MotifId(String)
 ```
 
 ### Data Flow Rules
 
-- **Down is default.** Each layer's output struct is the input for the next.
-- **Cross-references are explicit.** FeaturePlan receives MapIntent + GeometryPlan + TileMap as explicit inputs.
-- **Validators trigger reruns, not mutations.** On failure, constraints are adjusted and the offending layer re-executes.
+- **Down is default.** Each layer's output is the next layer's input.
+- **Cross-references are explicit.** FeaturePlan receives `SpatialPlan + GeometryPlan + TileMap`.
+- **Validators trigger reruns, not mutations.** On failure, constraints relax and the layer re-executes.
 
 ---
 
-## Layer Definitions
+## Design Decisions
 
-### SituationContext
+### Why types vs. data?
 
-The world/narrative layer. Provides thematic context without prescribing map structure.
+Types (enums) are for things that change the *control flow* — `NodeRole::Entry` triggers the "skip entities" logic, `EdgeRole::RestrictedTraversal` triggers locked-door placement. These need exhaustive matching.
 
-```rust
-struct SituationContext {
-    tags: Vec<Tag>,
-    bindings: HashMap<String, Value>,
-}
-```
+Data (JSON) is for things that change the *content* — which label a room gets, which features spawn, what entities appear. These should be open-ended without recompilation.
 
-Example: `tags: ["port_town", "rat_infestation", "food_shortage", "dock_district"]`
+### Why patterns + vocabularies (not LLM prompts)?
 
-This layer does not need to understand *why* or *what it means*. The next layer translates world facts into map-relevant directives.
+Deterministic, testable, seed-reproducible. An LLM could *produce* patterns and vocabularies as content authoring, but the runtime generation must be fully deterministic given a seed.
 
----
+### Why separate tiles from features?
 
-### MapIntent
+Tiles define *terrain* (affects pathfinding, line-of-sight). Features define *objects on terrain* (can block movement but are semantically different). A chest is not a tile — it's a feature placed on a floor tile.
 
-Translates narrative context into map-level directives. This is the "what should this map contain and feel like" layer.
+### Why property-based testing matters here?
 
-```rust
-struct MapIntent {
-    location_kind: LocationKind,
-    scale: MapScale,
-    tags: Vec<Tag>,
-    motifs: Vec<MotifId>,
-    required_spaces: Vec<SpaceRequirement>,
-    structural_graph: StructuralGraph,
-    constraints: Vec<IntentConstraint>,
-}
-```
-
-The `structural_graph` subsumes the current `ScenarioGraph` — it describes rooms, their roles, and traversal relationships. The rest of `MapIntent` adds non-structural requirements (scale, motifs, constraints).
-
----
-
-### SpatialPlan
-
-Abstract spatial topology. Knows *what* spaces exist and how they relate, but not *where* they are.
-
-```rust
-struct SpatialPlan {
-    spaces: Vec<SpaceSpec>,
-    links: Vec<SpaceLink>,
-    constraints: Vec<SpatialConstraint>,
-}
-
-struct SpaceSpec {
-    id: SpaceId,
-    role: SpaceRole,
-    archetype: Option<SpaceArchetype>,
-    tags: Vec<Tag>,
-    size_hint: SizeHint,
-}
-
-struct SpaceLink {
-    from: SpaceId,
-    to: SpaceId,
-    traversal: TraversalKind,
-    tags: Vec<Tag>,
-}
-
-enum SizeHint {
-    Tiny,       // 3x3 – 5x5
-    Small,      // 5x5 – 7x7
-    Medium,     // 7x7 – 11x9
-    Large,      // 11x9 – 15x13
-    Custom { min_w: i32, min_h: i32, max_w: i32, max_h: i32 },
-}
-```
-
-This replaces the current `FragmentGraph`. The key addition is `SpatialConstraint` — rules like "key_room must not be adjacent to goal" or "hub must be reachable within 2 links from entry".
-
----
-
-### GeometryPlan
-
-The first concrete spatial layer. Assigns coordinates and shapes to abstract spaces.
-
-```rust
-struct GeometryPlan {
-    spaces: Vec<PlacedSpace>,
-    links: Vec<PlacedLink>,
-}
-
-struct PlacedSpace {
-    id: SpaceId,
-    footprint: Footprint,
-    zones: Vec<Zone>,
-    tags: Vec<Tag>,
-}
-
-enum Footprint {
-    Rect(Rect),
-    Cells(Vec<Point>),
-    Composite(Vec<Footprint>),
-}
-
-struct Zone {
-    role: ZoneRole,
-    cells: Vec<Point>,
-}
-```
-
-`Footprint::Cells` enables irregular shapes (caves, L-shaped rooms). `Zone` subdivides a space into functional regions (e.g. "altar area" within a chapel).
-
-This replaces the current `PlacedLayout`.
-
----
-
-### TileMap
-
-The ground-truth 2D grid. Everything downstream reads from this.
-
-```rust
-struct TileMap {
-    width: u32,
-    height: u32,
-    tiles: Vec<Tile>,
-}
-
-enum Tile {
-    Void,
-    Floor,
-    Wall,
-    Door,
-    LockedDoor,
-    Water,
-    Pit,
-    Stairs,
-    // ... extensible
-}
-```
-
-Stays largely as-is. Tile variants will grow over time.
-
----
-
-### FeaturePlan
-
-Objects placed *on* the tile map. Needs map intent (room purpose), geometry (spatial context), and tiles (walkability).
-
-```rust
-struct FeaturePlan {
-    features: Vec<FeaturePlacement>,
-}
-
-struct FeaturePlacement {
-    kind: FeatureKind,
-    footprint: Vec<Point>,
-    anchor: Point,
-    space_id: SpaceId,
-    tags: Vec<Tag>,
-}
-
-enum FeatureKind {
-    Furniture(FurnitureType),
-    Container(ContainerType),
-    Trap(TrapType),
-    Decoration(DecorationId),
-    Interactable(InteractableId),
-}
-```
-
----
-
-### EntityPlan
-
-Dynamic things with behavior. Placed after features so they don't conflict.
-
-```rust
-struct EntityPlan {
-    entities: Vec<EntityPlacement>,
-}
-
-struct EntityPlacement {
-    archetype: EntityArchetypeId,
-    position: Point,
-    space_id: SpaceId,
-    behavior_tags: Vec<Tag>,
-    patrol_zone: Option<Vec<Point>>,
-}
-```
-
----
-
-### Validation
-
-Generic trait that any layer output can implement validators for.
-
-```rust
-trait Validator<T> {
-    fn validate(&self, value: &T, context: &ValidationContext) -> ValidationResult;
-}
-
-struct ValidationResult {
-    issues: Vec<ValidationIssue>,
-}
-
-struct ValidationIssue {
-    severity: Severity,
-    kind: IssueKind,
-    message: String,
-    suggestion: Option<ConstraintAdjustment>,
-}
-
-enum Severity {
-    Error,   // must fix — rerun
-    Warning, // acceptable but suboptimal
-    Info,    // debug information
-}
-```
-
-Validators are registered per-layer. The pipeline runner checks after each stage and decides whether to retry.
-
----
-
-## Migration Mapping
-
-| Old | New | Status |
-|---|---|---|
-| `scenario/graph.rs` → `ScenarioGraph` | `intent/graph.rs` → `ScenarioGraph` (will become `MapIntent.structural_graph`) | ✅ renamed |
-| `scenario/template.rs` | `intent/template.rs` | ✅ moved |
-| `scenario/instantiate.rs` | `intent/instantiate.rs` | ✅ moved |
-| `fragment/graph.rs` → `FragmentGraph` | `spatial/plan.rs` → `SpatialPlan` | ✅ renamed |
-| `fragment/expand.rs` → `FragmentExpander` | `spatial/planner.rs` → `SpatialPlanner` | ✅ renamed |
-| `layout/geom.rs` → `PlacedLayout` | `geometry/geom.rs` → `GeometryPlan` | ✅ renamed |
-| `layout/place.rs` → `Placer` | `geometry/planner.rs` → `GeometryPlanner` | ✅ renamed |
-| `tile/` | `tile/` (unchanged) | ✅ |
-| *(new)* | `feature/` | ✅ stub |
-| *(new)* | `entity/` | ✅ stub |
-| *(new)* | `validate/` | ✅ stub |
-| *(new)* | `situation/` | ✅ implemented |
-| *(new)* | `intent/map_intent.rs` | ✅ implemented |
-| *(new)* | `intent/builder.rs` | ✅ implemented |
-
----
-
-## Phased Task Breakdown
-
-### Phase 1: Foundation — Tag Newtype + Module Restructure ✅
-
-**Goal:** Align module names with target architecture. No logic changes.
-
-**Status: COMPLETE**
-
-| # | Task | Status |
-|---|---|---|
-| 1.1 | Introduce `Tag` newtype in `src/tag.rs`, re-export from `lib.rs` | ✅ |
-| 1.2 | Migrate all `Vec<String>` tag fields to `Vec<Tag>` | ✅ |
-| 1.3 | Rename `scenario/` → `intent/` | ✅ |
-| 1.4 | Rename `fragment/` → `spatial/`, types renamed (`SpatialPlan`, `SpaceSpec`, etc.) | ✅ |
-| 1.5 | Rename `layout/` → `geometry/`, types renamed (`GeometryPlan`, `PlacedSpace`, etc.) | ✅ |
-| 1.6 | Add stub modules: `feature/`, `entity/`, `validate/`, `situation/` | ✅ |
-| 1.7 | Add utility methods: `Point::cardinals/neighbors`, `Rect::overlaps`, `Tile::is_walkable/is_solid`, `TileMap::flood_fill` | ✅ |
-| 1.8 | Property-based tests for spatial planner (5 tests) and rasterizer (3 tests) | ✅ |
-| 1.9 | Integration tests for the crypt demo (connectivity, overlaps, tile types, space count) | ✅ |
-| 1.10 | Verify `cargo run` and `cargo test` pass with zero warnings | ✅ |
-
-**Exit criterion:** Same ASCII output, new module names, `Tag` newtype in use, 12 tests passing.
-
----
-
-### Phase 2: MapIntent + SituationContext ✅
-
-**Goal:** Introduce the upper layers of the pipeline.
-
-**Status: COMPLETE**
-
-| # | Task | Status |
-|---|---|---|
-| 2.1 | Define `SituationContext` struct in `situation/` with tags + bindings + builder methods | ✅ |
-| 2.2 | Define `MapIntent` struct in `intent/map_intent.rs` (LocationKind, MapScale, MotifId, IntentConstraint) | ✅ |
-| 2.3 | Implement `trait IntentBuilder` in `intent/builder.rs` (`SituationContext → MapIntent`) | ✅ |
-| 2.4 | Refactor `crypt.rs` demo: `build_crypt_situation()` + `CryptIntentBuilder` | ✅ |
-| 2.5 | Change `SpatialPlanner::plan` to accept `&MapIntent` instead of `&ScenarioGraph` | ✅ |
-| 2.6 | Update `main.rs` to use full pipeline: situation → intent → spatial → geometry → tiles → ascii | ✅ |
-| 2.7 | Update integration tests to use Phase 2 path + new metadata test | ✅ |
-| 2.8 | Verify `cargo run`, `cargo test`, `cargo clippy` all pass with zero warnings | ✅ |
-
-**Exit criterion:** Pipeline starts from `SituationContext`, flows through `MapIntent`, same ASCII output, 13 tests passing.
-
----
-
-### Phase 3: Enrich SpatialPlan ✅
-
-**Goal:** Make the spatial layer expressive enough for diverse maps.
-
-**Status: COMPLETE**
-
-| # | Task | Status |
-|---|---|---|
-| 3.1 | Add `SpaceArchetype` enum (Hall, Chamber, Corridor, Vestibule, Vault, Shaft, Courtyard, Workshop) | ✅ |
-| 3.2 | Add `SizeHint` enum to `SpaceSpec` (Tiny, Small, Medium, Large, Grand, Custom) | ✅ |
-| 3.3 | Add `SpatialConstraint` enum (MustBeAdjacent, MustBeSeparated, MaxDistance, GatedBy, PreferPerimeter, PreferCentral) | ✅ |
-| 3.4 | Update `SpatialPlanner` to use archetypes + hints via `resolve_dimensions()` | ✅ |
-| 3.5 | Add tavern cellar demo (`demo/tavern.rs`) with different topology + archetypes | ✅ |
-| 3.6 | Replace hardcoded geometry planner with BFS-based generic layout | ✅ |
-| 3.7 | Z-shape corridor routing with room-aware safe transfer coordinate search | ✅ |
-| 3.8 | Straight corridors when rooms share y/x range; Z-shape only when needed | ✅ |
-| 3.9 | Door connectivity tests (doors must have 2+ walkable cardinal neighbors) | ✅ |
-| 3.10 | Both demos produce valid, connected output (30 tests passing) | ✅ |
-
-**Exit criterion:** Two demos working, spatial plan carries archetype/constraint information, geometry planner is generic with room-avoiding corridors.
-
----
-
-### Phase 4: Real Geometry Placement ✅
-
-**Goal:** Algorithmic placement with validation, constraint awareness, and retry logic.
-
-| # | Task | Key additions |
-|---|---|---|
-| 4.1 | `Footprint` enum + data model | `Footprint` (Rect/Cells/Composite) with `bounding_rect()`; rasterizer dispatches on variant |
-| 4.2 | `CorridorRouter` trait | `geometry/routing.rs` — `ZShapeRouter` impl; 3 unit tests |
-| 4.3 | `GeometryValidator` | `validate/geometry.rs` — 6 checks (overlap, spacing, endpoint validity, connectivity, corridor–room intersection, corridor–corridor overlap); `Rect` geometry helpers; 22 unit tests + 5 proptests |
-| 4.4 | Constraint-aware placement | BFS root selection (PreferCentral), perimeter nudge, MustBeSeparated enforcement, min-gap relaxation; `PlacementConfig`; 12 unit tests |
-| 4.5 | Face-based corridor routing | `determine_exit_face`/`determine_entry_face`, mergeable link grouping, L-shape preference; 10 unit tests |
-| 4.6 | Validator pipeline + retry | `plan_with_validation()` with 3 retries + spacing relaxation; door-overwrite fix in rasterizer; `normalize_positions`; `main.rs` wired up |
-| 4.7 | Stress tests | 5 proptests on random SpatialPlans (3–10 spaces, 50 cases); 4 validation integration tests; fuzzer-found normalization bug fixed |
-
-**Design decisions:** Evolve BFS layout (don't replace); validate after (not during) generation; simple retry (relax spacing, up to 3 attempts); `CorridorRouter` trait for future extensibility; `Footprint::Cells`/`Composite` are Phase 8 extension points.
-
-**Result:** 103 tests (81 unit + 22 integration), both demos produce validated output, `--trace` pipeline observability via `tracing`.
-
----
-
-### Phase 5: FeaturePlan
-
-**Goal:** Place objects within rooms based on intent and geometry.
-
-| # | Task | Description |
-|---|---|---|
-| 5.1 | Define `FeaturePlan`, `FeaturePlacement`, `FeatureKind` structs | `feature/plan.rs` |
-| 5.2 | Define `trait FeaturePlanner` | takes `MapIntent + GeometryPlan + TileMap → FeaturePlan` |
-| 5.3 | Simple implementation: place features by room role (altar in chapel, chest in vault) | `feature/planner.rs` |
-| 5.4 | Extend tile rendering to show features (new chars or overlay) | `tile/ascii.rs` |
-| 5.5 | Validate: no features on walls, required features present per role | `validate/feature.rs` |
-
-**Exit criterion:** Demo output shows placed features, validation passes.
-
----
-
-### Phase 6: EntityPlan
-
-**Goal:** Place dynamic entities (monsters, NPCs, items).
-
-| # | Task | Description |
-|---|---|---|
-| 6.1 | Define `EntityPlan`, `EntityPlacement`, `EntityArchetypeId` structs | `entity/plan.rs` |
-| 6.2 | Define `trait EntityPlanner` | takes `FeaturePlan + TileMap + MapIntent → EntityPlan` |
-| 6.3 | Simple implementation: spawn by room tags + density rules | `entity/planner.rs` |
-| 6.4 | Extend rendering to show entities | `tile/ascii.rs` |
-| 6.5 | Validate: entities on walkable tiles, not on features, density within bounds | `validate/entity.rs` |
-
-**Exit criterion:** Demo output shows entities, validation passes.
-
----
-
-### Phase 7: Pipeline Runner + Validation Loop
-
-**Goal:** Formalize the generation pipeline as a reusable runner with retry semantics.
-
-| # | Task | Description |
-|---|---|---|
-| 7.1 | Define `Pipeline` struct that orchestrates all stages | `pipeline.rs` |
-| 7.2 | Define `PipelineConfig` with max retries, constraint relaxation strategy | `pipeline.rs` |
-| 7.3 | Implement retry loop: on validation failure, adjust constraints and rerun | `pipeline.rs` |
-| 7.4 | `main.rs` becomes a thin wrapper around `Pipeline::run(situation)` | `main.rs` |
-| 7.5 | Add integration test that runs pipeline N times and asserts all outputs valid | `tests/` |
-
-**Exit criterion:** Pipeline runner handles failures gracefully, multiple runs all produce valid output.
-
----
-
-### Phase 8: Algorithmic Depth (open-ended)
-
-**Goal:** Now flesh out individual layers with sophisticated algorithms.
-
-| Area | Possible approaches |
-|---|---|
-| Spatial planning | Graph grammars, L-systems, template expansion |
-| Geometry placement | BSP subdivision, Poisson disc, force-directed, constraint solving |
-| Room shapes | Cellular automata (caves), Perlin noise, prefab templates, WFC |
-| Corridors | A* with cost maps, river-style meandering, multi-width |
-| Features | Rule-based placement, template interiors, WFC for furniture layout |
-| Entities | Encounter budgets, patrol path generation, loot tables |
-| Validation | Reachability analysis, pacing curves, difficulty gradients |
-
-Each of these is an independent implementation behind an existing trait — safe to explore without breaking the architecture.
-
----
-
-## Design Decisions & Rationale
-
-### Why separate SpatialPlan from GeometryPlan?
-
-Spatial planning is *topological* (what connects to what, how big roughly). Geometry planning is *metric* (exact coordinates, shapes). Separating them means you can:
-- Change placement algorithms without changing the abstract room graph
-- Validate spatial relationships before committing to coordinates
-- Support different geometry strategies (grid-aligned, free-form, template-based) for the same spatial plan
-
-### Why is FeaturePlan after TileMap?
-
-Features need to know walkable cells (from TileMap), room boundaries (from GeometryPlan), and room purpose (from MapIntent). They're placed *on* terrain, not *as* terrain.
-
-### Why separate FeaturePlan from EntityPlan?
-
-Features are static (furniture, traps, decorations). Entities are dynamic (monsters, NPCs). They have different placement constraints:
-- Features: footprint-based, can block movement, define room character
-- Entities: point-based, must be on walkable tiles, need patrol zones
-
-### Why validators instead of generation-time checks?
-
-Validators are composable, testable, and can be run independently. They also enable the retry loop: "this layout failed connectivity validation, relax spacing constraints and try again." Baking validation into generators makes them harder to test and combine.
-
-### Why top-down?
-
-Because the alternative (bottom-up from tile generation) leads to:
-1. Over-investment in one layer before knowing what consumers need
-2. Refactoring pain when you discover layer N+1 needs different data from layer N
-3. The classic "I spent a month on cave generation but now I can't place doors" problem
-
-Top-down means contracts are stable before implementations get complex.
+The system is becoming highly compositional: random patterns × random vocabularies × random seeds × random rules = exponential combinations. You can't hand-write enough integration tests. Proptest generates arbitrary valid inputs and asserts invariants (connectivity, no overlaps, safe entry rooms) hold for *all* of them.
 
 ---
 
 ## Success Criteria
 
-The architecture is "done" when:
+The system is "done" when:
 
-1. A single `Pipeline::run(SituationContext)` call produces a fully populated map with rooms, corridors, features, and entities.
-2. Multiple demo scenarios (crypt, tavern, cave system, mansion) all produce valid, distinct output.
-3. Any single layer can be replaced with a new implementation without touching other layers.
-4. Validation catches obviously broken maps and the retry loop fixes them.
-5. `cargo run` always works.
+1. `Pipeline::run(situation)` produces a valid map for *any* well-formed situation context — no per-scenario code needed.
+2. Adding a new scenario = authoring data files (vocabulary JSON + pattern selection tags). Zero Rust changes.
+3. The same situation + different seeds → different maps that all pass validation and feel thematically coherent.
+4. Property-based tests confirm invariants hold across thousands of random combinations.
+5. At least 4 distinct scenarios demonstrate meaningfully different structures and themes.
+6. `cargo run` always works, `cargo test` is always green.

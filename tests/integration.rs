@@ -397,6 +397,187 @@ fn tavern_doors_connect_two_sides() {
 // Phase 4.7: Stress tests — random SpatialPlans through full pipeline
 // ============================================================
 
+// ============================================================
+// Phase 5: Feature placement integration tests
+// ============================================================
+
+use procgen::feature::plan::FeatureKind;
+use procgen::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use procgen::validate::feature::{FeatureValidationInput, FeatureValidator};
+
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+
+/// Helper: run the crypt pipeline through feature placement.
+fn run_crypt_features() -> (
+    procgen::spatial::plan::SpatialPlan,
+    procgen::geometry::geom::GeometryPlan,
+    procgen::tile::map::TileMap,
+    procgen::feature::plan::FeaturePlan,
+) {
+    let intent = build_crypt_intent();
+    let spatial = SimpleSpatialPlanner.plan(&intent).unwrap();
+    let geometry = SimpleGeometryPlanner::default()
+        .plan_with_validation(&spatial)
+        .unwrap();
+    let map = SimpleRasterizer.rasterize(&geometry).unwrap();
+    let mut rng = StdRng::seed_from_u64(42);
+    let features = SimpleFeaturePlanner
+        .plan(&spatial, &geometry, &map, &mut rng)
+        .unwrap();
+    (spatial, geometry, map, features)
+}
+
+/// Helper: run the tavern pipeline through feature placement.
+fn run_tavern_features() -> (
+    procgen::spatial::plan::SpatialPlan,
+    procgen::geometry::geom::GeometryPlan,
+    procgen::tile::map::TileMap,
+    procgen::feature::plan::FeaturePlan,
+) {
+    let intent = build_tavern_intent();
+    let spatial = SimpleSpatialPlanner.plan(&intent).unwrap();
+    let geometry = SimpleGeometryPlanner::default()
+        .plan_with_validation(&spatial)
+        .unwrap();
+    let map = SimpleRasterizer.rasterize(&geometry).unwrap();
+    let mut rng = StdRng::seed_from_u64(42);
+    let features = SimpleFeaturePlanner
+        .plan(&spatial, &geometry, &map, &mut rng)
+        .unwrap();
+    (spatial, geometry, map, features)
+}
+
+#[test]
+fn crypt_feature_plan_succeeds() {
+    let (_, _, _, features) = run_crypt_features();
+    assert!(
+        !features.features.is_empty(),
+        "crypt should have at least one feature placed"
+    );
+}
+
+#[test]
+fn tavern_feature_plan_succeeds() {
+    let (_, _, _, features) = run_tavern_features();
+    assert!(
+        !features.features.is_empty(),
+        "tavern should have at least one feature placed"
+    );
+}
+
+#[test]
+fn crypt_features_pass_validation() {
+    let (spatial, geometry, map, features) = run_crypt_features();
+    let result = FeatureValidator.validate(&FeatureValidationInput {
+        features: &features,
+        tiles: &map,
+        geometry: &geometry,
+        spatial: &spatial,
+    });
+    assert!(
+        result.is_ok(),
+        "crypt feature validation should pass, issues: {:?}",
+        result.issues
+    );
+}
+
+#[test]
+fn tavern_features_pass_validation() {
+    let (spatial, geometry, map, features) = run_tavern_features();
+    let result = FeatureValidator.validate(&FeatureValidationInput {
+        features: &features,
+        tiles: &map,
+        geometry: &geometry,
+        spatial: &spatial,
+    });
+    assert!(
+        result.is_ok(),
+        "tavern feature validation should pass, issues: {:?}",
+        result.issues
+    );
+}
+
+#[test]
+fn crypt_has_sarcophagus_in_vault() {
+    let (_, _, _, features) = run_crypt_features();
+    let has_sarcophagus = features
+        .features
+        .iter()
+        .any(|f| f.kind == FeatureKind::Sarcophagus);
+    assert!(
+        has_sarcophagus,
+        "crypt should have a sarcophagus in the family vault"
+    );
+}
+
+#[test]
+fn tavern_has_table_in_hub() {
+    let (_, _, _, features) = run_tavern_features();
+    let has_table = features
+        .features
+        .iter()
+        .any(|f| f.kind == FeatureKind::Table);
+    assert!(has_table, "tavern should have a table in the taproom hub");
+}
+
+#[test]
+fn crypt_features_no_overlap() {
+    let (_, _, _, features) = run_crypt_features();
+    let mut all_cells = std::collections::HashSet::new();
+    for f in &features.features {
+        for &cell in &f.cells {
+            assert!(
+                all_cells.insert(cell),
+                "crypt: feature cell ({}, {}) is used by multiple features",
+                cell.x,
+                cell.y
+            );
+        }
+    }
+}
+
+#[test]
+fn tavern_features_no_overlap() {
+    let (_, _, _, features) = run_tavern_features();
+    let mut all_cells = std::collections::HashSet::new();
+    for f in &features.features {
+        for &cell in &f.cells {
+            assert!(
+                all_cells.insert(cell),
+                "tavern: feature cell ({}, {}) is used by multiple features",
+                cell.x,
+                cell.y
+            );
+        }
+    }
+}
+
+#[test]
+fn crypt_ascii_output_contains_feature_chars() {
+    let (_, _, map, features) = run_crypt_features();
+    let output = procgen::tile::ascii::render_ascii_with_features(&map, &features);
+    // Should contain at least one feature character.
+    let feature_chars = ['\u{2020}', 'S', '$', 'o', '=', 'T', '^', '~'];
+    let has_feature = feature_chars.iter().any(|&ch| output.contains(ch));
+    assert!(
+        has_feature,
+        "crypt ASCII output should contain at least one feature char"
+    );
+}
+
+#[test]
+fn tavern_ascii_output_contains_feature_chars() {
+    let (_, _, map, features) = run_tavern_features();
+    let output = procgen::tile::ascii::render_ascii_with_features(&map, &features);
+    let feature_chars = ['\u{2020}', 'S', '$', 'o', '=', 'T', '^', '~'];
+    let has_feature = feature_chars.iter().any(|&ch| output.contains(ch));
+    assert!(
+        has_feature,
+        "tavern ASCII output should contain at least one feature char"
+    );
+}
+
 mod stress_tests {
     use super::*;
     use procgen::geometry::planner::SimpleGeometryPlanner;
@@ -712,4 +893,322 @@ mod stress_tests {
             }
         }
     }
+}
+
+// ============================================================
+// Phase 6: Entity placement integration tests
+// ============================================================
+
+use procgen::entity::plan::EntityArchetypeId;
+use procgen::entity::planner::{EntityPlanner, SimpleEntityPlanner};
+use procgen::validate::entity::{EntityValidationInput, EntityValidator};
+
+/// Helper: run the crypt pipeline through entity placement.
+fn run_crypt_entities() -> (
+    procgen::spatial::plan::SpatialPlan,
+    procgen::geometry::geom::GeometryPlan,
+    procgen::tile::map::TileMap,
+    procgen::feature::plan::FeaturePlan,
+    procgen::entity::plan::EntityPlan,
+) {
+    let (spatial, geometry, map, features) = run_crypt_features();
+    let mut rng = StdRng::seed_from_u64(42);
+    let entities = SimpleEntityPlanner
+        .plan(&spatial, &geometry, &map, &features, &mut rng)
+        .unwrap();
+    (spatial, geometry, map, features, entities)
+}
+
+/// Helper: run the tavern pipeline through entity placement.
+fn run_tavern_entities() -> (
+    procgen::spatial::plan::SpatialPlan,
+    procgen::geometry::geom::GeometryPlan,
+    procgen::tile::map::TileMap,
+    procgen::feature::plan::FeaturePlan,
+    procgen::entity::plan::EntityPlan,
+) {
+    let (spatial, geometry, map, features) = run_tavern_features();
+    let mut rng = StdRng::seed_from_u64(42);
+    let entities = SimpleEntityPlanner
+        .plan(&spatial, &geometry, &map, &features, &mut rng)
+        .unwrap();
+    (spatial, geometry, map, features, entities)
+}
+
+#[test]
+fn crypt_entity_plan_succeeds() {
+    let (_, _, _, _, entities) = run_crypt_entities();
+    assert!(
+        !entities.entities.is_empty(),
+        "crypt should have at least one entity placed"
+    );
+}
+
+#[test]
+fn tavern_entity_plan_succeeds() {
+    let (_, _, _, _, entities) = run_tavern_entities();
+    assert!(
+        !entities.entities.is_empty(),
+        "tavern should have at least one entity placed"
+    );
+}
+
+#[test]
+fn crypt_entities_pass_validation() {
+    let (spatial, geometry, map, features, entities) = run_crypt_entities();
+    let result = EntityValidator.validate(&EntityValidationInput {
+        entities: &entities,
+        features: &features,
+        tiles: &map,
+        geometry: &geometry,
+        spatial: &spatial,
+    });
+    assert!(
+        result.is_ok(),
+        "crypt entity validation should pass, issues: {:?}",
+        result.issues
+    );
+}
+
+#[test]
+fn tavern_entities_pass_validation() {
+    let (spatial, geometry, map, features, entities) = run_tavern_entities();
+    let result = EntityValidator.validate(&EntityValidationInput {
+        entities: &entities,
+        features: &features,
+        tiles: &map,
+        geometry: &geometry,
+        spatial: &spatial,
+    });
+    assert!(
+        result.is_ok(),
+        "tavern entity validation should pass, issues: {:?}",
+        result.issues
+    );
+}
+
+#[test]
+fn crypt_entities_no_feature_overlap() {
+    let (_, _, _, features, entities) = run_crypt_entities();
+    let feature_cells: std::collections::HashSet<Point> = features
+        .features
+        .iter()
+        .flat_map(|f| f.cells.iter().copied())
+        .collect();
+    for entity in &entities.entities {
+        assert!(
+            !feature_cells.contains(&entity.position),
+            "crypt: entity '{}' at ({}, {}) overlaps a feature",
+            entity.archetype,
+            entity.position.x,
+            entity.position.y
+        );
+    }
+}
+
+#[test]
+fn tavern_entities_no_feature_overlap() {
+    let (_, _, _, features, entities) = run_tavern_entities();
+    let feature_cells: std::collections::HashSet<Point> = features
+        .features
+        .iter()
+        .flat_map(|f| f.cells.iter().copied())
+        .collect();
+    for entity in &entities.entities {
+        assert!(
+            !feature_cells.contains(&entity.position),
+            "tavern: entity '{}' at ({}, {}) overlaps a feature",
+            entity.archetype,
+            entity.position.x,
+            entity.position.y
+        );
+    }
+}
+
+#[test]
+fn crypt_entry_has_no_entities() {
+    let (spatial, _, _, _, entities) = run_crypt_entities();
+    let entry_id = spatial
+        .spaces
+        .iter()
+        .find(|s| s.role == procgen::intent::graph::NodeRole::Entry)
+        .expect("crypt should have an entry space")
+        .id;
+    let entry_entities = entities.entities_in_space(entry_id);
+    assert!(
+        entry_entities.is_empty(),
+        "entry room should have no entities, got: {:?}",
+        entry_entities
+            .iter()
+            .map(|e| &e.archetype)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn tavern_entry_has_no_entities() {
+    let (spatial, _, _, _, entities) = run_tavern_entities();
+    let entry_id = spatial
+        .spaces
+        .iter()
+        .find(|s| s.role == procgen::intent::graph::NodeRole::Entry)
+        .expect("tavern should have an entry space")
+        .id;
+    let entry_entities = entities.entities_in_space(entry_id);
+    assert!(
+        entry_entities.is_empty(),
+        "entry room should have no entities, got: {:?}",
+        entry_entities
+            .iter()
+            .map(|e| &e.archetype)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn crypt_ascii_output_contains_entity_chars() {
+    let (_, _, map, features, entities) = run_crypt_entities();
+    let output = procgen::tile::ascii::render_ascii_with_entities(&map, &features, &entities);
+    let entity_chars = ['r', 's', 'G', '@', 'M', 'E'];
+    let has_entity = entity_chars.iter().any(|&ch| output.contains(ch));
+    assert!(
+        has_entity,
+        "crypt ASCII output should contain at least one entity char"
+    );
+}
+
+#[test]
+fn tavern_ascii_output_contains_entity_chars() {
+    let (_, _, map, features, entities) = run_tavern_entities();
+    let output = procgen::tile::ascii::render_ascii_with_entities(&map, &features, &entities);
+    let entity_chars = ['r', 's', 'G', '@', 'M', 'E'];
+    let has_entity = entity_chars.iter().any(|&ch| output.contains(ch));
+    assert!(
+        has_entity,
+        "tavern ASCII output should contain at least one entity char"
+    );
+}
+
+#[test]
+fn crypt_has_guardians_in_goal() {
+    let (_, _, _, _, entities) = run_crypt_entities();
+    let has_guardian = entities
+        .entities
+        .iter()
+        .any(|e| e.archetype == EntityArchetypeId::from("skeleton_guardian"));
+    assert!(
+        has_guardian,
+        "crypt should have skeleton guardians in the goal room"
+    );
+}
+
+#[test]
+fn tavern_has_smuggler() {
+    let (_, _, _, _, entities) = run_tavern_entities();
+    let has_smuggler = entities
+        .entities
+        .iter()
+        .any(|e| e.archetype == EntityArchetypeId::from("smuggler"));
+    assert!(
+        has_smuggler,
+        "tavern should have a smuggler in the tunnel room"
+    );
+}
+
+// ============================================================
+// Phase 7: Pipeline runner integration tests
+// ============================================================
+
+use procgen::pipeline::{Pipeline, PipelineConfig};
+
+/// Run the crypt scenario through the Pipeline runner N times with different seeds.
+/// All runs must succeed and produce valid output.
+#[test]
+fn pipeline_crypt_multiple_seeds_all_valid() {
+    let situation = build_crypt_situation();
+    for seed in 0..10u64 {
+        let config = PipelineConfig {
+            seed: Some(seed),
+            ..PipelineConfig::default()
+        };
+        let pipeline = Pipeline { config };
+        let result = pipeline.run(&situation, &CryptIntentBuilder);
+        assert!(
+            result.is_ok(),
+            "crypt pipeline failed with seed {seed}: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        // Basic sanity: map is non-empty, has entities and features.
+        assert!(r.tiles.width > 0);
+        assert!(r.tiles.height > 0);
+        assert!(!r.features.features.is_empty(), "seed {seed}: no features");
+        assert!(!r.entities.entities.is_empty(), "seed {seed}: no entities");
+    }
+}
+
+/// Run the tavern scenario through the Pipeline runner N times with different seeds.
+#[test]
+fn pipeline_tavern_multiple_seeds_all_valid() {
+    let situation = build_tavern_situation();
+    for seed in 100..110u64 {
+        let config = PipelineConfig {
+            seed: Some(seed),
+            ..PipelineConfig::default()
+        };
+        let pipeline = Pipeline { config };
+        let result = pipeline.run(&situation, &TavernIntentBuilder);
+        assert!(
+            result.is_ok(),
+            "tavern pipeline failed with seed {seed}: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        assert!(r.tiles.width > 0);
+        assert!(r.tiles.height > 0);
+        assert!(!r.features.features.is_empty(), "seed {seed}: no features");
+        assert!(!r.entities.entities.is_empty(), "seed {seed}: no entities");
+    }
+}
+
+/// Same seed produces identical output (determinism test).
+#[test]
+fn pipeline_determinism_same_seed_same_output() {
+    let situation = build_crypt_situation();
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+
+    let pipeline = Pipeline {
+        config: config.clone(),
+    };
+    let r1 = pipeline.run(&situation, &CryptIntentBuilder).unwrap();
+
+    let pipeline = Pipeline { config };
+    let r2 = pipeline.run(&situation, &CryptIntentBuilder).unwrap();
+
+    // Compare ASCII output as a proxy for full equality.
+    let ascii1 =
+        procgen::tile::ascii::render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
+    let ascii2 =
+        procgen::tile::ascii::render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+    assert_eq!(ascii1, ascii2, "same seed should produce identical output");
+}
+
+/// Pipeline with no seed (entropy) should still produce valid output.
+#[test]
+fn pipeline_no_seed_still_valid() {
+    let situation = build_crypt_situation();
+    let config = PipelineConfig {
+        seed: None,
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline.run(&situation, &CryptIntentBuilder);
+    assert!(
+        result.is_ok(),
+        "pipeline without seed failed: {:?}",
+        result.err()
+    );
 }

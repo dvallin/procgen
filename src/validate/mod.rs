@@ -1,5 +1,7 @@
 //! Validation traits and implementations.
 
+pub mod entity;
+pub mod feature;
 pub mod geometry;
 
 /// Generic validator trait. Implementations check a generated artifact for issues.
