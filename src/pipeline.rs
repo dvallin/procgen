@@ -22,6 +22,7 @@ use crate::geometry::planner::{
     GeometryPlanError, GeometryPlanner, PlacementConfig, SimpleGeometryPlanner,
 };
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
+use crate::intent::generic_builder::GenericIntentBuilder;
 use crate::intent::map_intent::MapIntent;
 use crate::situation::SituationContext;
 use crate::spatial::plan::SpatialPlan;
@@ -198,11 +199,20 @@ impl From<EntityPlanError> for PipelineError {
 /// Orchestrates the full generation pipeline with configurable retry and
 /// constraint relaxation.
 ///
+/// By default, [`Pipeline::run`] constructs a [`GenericIntentBuilder`] from the
+/// embedded asset data. Use [`Pipeline::run_with`] to supply a custom
+/// [`IntentBuilder`] (e.g. in tests).
+///
 /// # Example
 ///
-/// ```ignore
-/// let pipeline = Pipeline { config: PipelineConfig::default() };
-/// let result = pipeline.run(&situation, &my_intent_builder)?;
+/// ```
+/// use procgen::pipeline::{Pipeline, PipelineConfig};
+/// use procgen::demo::crypt::build_crypt_situation;
+///
+/// let pipeline = Pipeline { config: PipelineConfig { seed: Some(42), ..PipelineConfig::default() } };
+/// let situation = build_crypt_situation();
+/// let result = pipeline.run(&situation).unwrap();
+/// assert!(result.tiles.width > 0);
 /// ```
 pub struct Pipeline {
     /// Runtime configuration (retries, relaxation strategy).
@@ -210,7 +220,17 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    /// Execute the full pipeline:
+    /// Execute the full pipeline using the default [`GenericIntentBuilder`].
+    ///
+    /// This is the primary entry point. It constructs a
+    /// [`GenericIntentBuilder::from_defaults`] internally, then delegates to
+    /// [`Pipeline::run_with`].
+    pub fn run(&self, situation: &SituationContext) -> Result<PipelineResult, PipelineError> {
+        let builder = GenericIntentBuilder::from_defaults()?;
+        self.run_with(situation, &builder)
+    }
+
+    /// Execute the full pipeline with a caller-supplied [`IntentBuilder`].
     ///
     /// 1. Build intent from [`SituationContext`].
     /// 2. Plan abstract spatial layout.
@@ -218,7 +238,7 @@ impl Pipeline {
     /// 4. Rasterise tiles.
     /// 5. Place features and validate.
     /// 6. Place entities and validate.
-    pub fn run(
+    pub fn run_with(
         &self,
         situation: &SituationContext,
         intent_builder: &dyn IntentBuilder,
@@ -239,7 +259,7 @@ impl Pipeline {
 
         // ── 1. Intent ──────────────────────────────────────────────────
         info!("building intent");
-        let intent = intent_builder.build(situation)?;
+        let intent = intent_builder.build(situation, &mut rng)?;
         debug!(nodes = intent.structural_graph.nodes.len(), "intent built");
 
         // ── 2. Spatial planning ────────────────────────────────────────

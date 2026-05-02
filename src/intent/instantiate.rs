@@ -52,6 +52,7 @@ impl ScenarioTemplateInstantiator for SimpleScenarioInstantiator {
                 role: parse_node_role(&n.role)?,
                 tags: n.tags.iter().map(|t| Tag::from(t.as_str())).collect(),
                 label: n.label.clone(),
+                archetype_hint: None,
             });
         }
 

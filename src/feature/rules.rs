@@ -36,20 +36,20 @@ pub struct FeatureRule {
 impl FeatureRule {
     /// Does this rule apply to the given space?
     pub fn matches(&self, spec: &SpaceSpec) -> bool {
-        if let Some(role) = self.match_role {
-            if spec.role != role {
-                return false;
-            }
+        if let Some(role) = self.match_role
+            && spec.role != role
+        {
+            return false;
         }
-        if let Some(archetype) = self.match_archetype {
-            if spec.archetype != Some(archetype) {
-                return false;
-            }
+        if let Some(archetype) = self.match_archetype
+            && spec.archetype != Some(archetype)
+        {
+            return false;
         }
-        if let Some(ref tag) = self.match_tag {
-            if !spec.tags.contains(tag) {
-                return false;
-            }
+        if let Some(ref tag) = self.match_tag
+            && !spec.tags.contains(tag)
+        {
+            return false;
         }
         true
     }

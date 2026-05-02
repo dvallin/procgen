@@ -8,7 +8,7 @@ A story-driven procedural generator where narrative signals steer every decision
 
 ## Where We Are
 
-The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 213 tests (property-based + integration) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phase 1 (Data-Driven Rules & Asset Loading) is complete.**
+The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 289 tests (property-based + integration + regression) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phase 1 (Data-Driven Rules & Asset Loading) is complete. Phase 2 (Narrative Patterns & Intent Generation) is complete.**
 
 ```
 SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
@@ -16,23 +16,22 @@ SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPla
 
 **What works:**
 - Full pipeline runner with retry semantics and seeded RNG
+- Data-driven intent generation: pattern selection → vocabulary lookup → slot filling → constraint inference → MapIntent assembly
 - Geometry placement with constraint-aware layout and corridor routing
 - Feature placement (furniture, traps, decorations) driven by role/tag rules
 - Entity placement (monsters, NPCs) with patrol zones and safe entry rooms
 - Validators at geometry, feature, and entity levels
 - Property-based stress tests with random spatial plans
-- Two regression scenarios: Noble Crypt (lock-and-key), Tavern Cellar (branching + secret)
-- **Data-driven rules**: Feature/entity rules loaded from JSON assets (`assets/rules/`)
-- **Asset loader**: Generic `load_rules<T>()` with file + embedded fallback
-- **Pipeline rule overrides**: `PipelineConfig.feature_rules` / `.entity_rules` let callers inject custom rule sets
-- **Proptest coverage**: Random rule sets (arbitrary roles, tags, counts) never cause panics
+- Two regression scenarios: Noble Crypt (lock-and-key), Tavern Cellar (hub-and-spoke)
+- Data-driven rules: Feature/entity rules loaded from JSON assets
+- Asset loader: Generic `load_rules<T>()` with file + embedded fallback
+- Pipeline rule overrides: `PipelineConfig.feature_rules` / `.entity_rules` let callers inject custom rule sets
+- 5 narrative patterns as JSON, pattern selector with weighted voting + RNG tiebreaking
+- 2 theme vocabularies with role-indexed entries (labels, tags, archetypes, location_kind, motifs)
+- `Pipeline::run()` uses `GenericIntentBuilder` internally; no hard-coded builders remain
 
-**What's missing:**
-- The `IntentBuilder` is hard-coded per scenario — no generative inference from situation
-- Theme/variety is baked in — no vocabulary system, no atmosphere-driven selection
-- Tile types are a fixed enum — can't express game-specific terrain
-- Maps are structurally correct but narratively flat — no pacing, no tension curve
-- No world layer — rule set selection is manual (will be driven by world context in the future)
+**What’s next (Phase 3):**
+- Tile Registry & Data-Driven Rasterization
 
 ---
 
@@ -79,25 +78,30 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 ---
 
-### Phase 2: Narrative Patterns & Intent Generation
+### Phase 2: Narrative Patterns & Intent Generation ✅
 
-**Goal:** Replace hard-coded `IntentBuilder` fixtures with a generative system that infers a `ScenarioGraph` from situation tags.
+**Goal:** Replace hard-coded `IntentBuilder` fixtures with a generative system that infers a complete `MapIntent` from just situation tags + bindings.
 
-| # | Task | Description |
-|---|---|---|
-| 2.1 | **NarrativePattern data model** | A pattern is a parameterized graph template: named slots with role constraints, edges with traversal types, metadata (what tags vote for this pattern). JSON-serializable. |
-| 2.2 | **Pattern library** | 4–5 starter patterns: "lock-and-key" (Entry→Hub→Gate→Goal + optional branches), "branching-exploration" (Hub with N spokes), "linear-descent" (chain of increasing danger), "hub-and-spoke" (central hub, radiating paths), "gauntlet" (linear + gates). |
-| 2.3 | **Pattern Selector** | Situation tags have weighted votes for patterns. `locked_vault` → lock-and-key (+3). `open_cavern` → hub-and-spoke (+2). Highest-scoring pattern wins (with RNG tiebreaking). |
-| 2.4 | **Theme Vocabulary** | Data model: maps `(role, theme_binding)` → list of `{label, tags, archetype}` tuples. E.g. theme `undead_nobility`: Hub → ("Great Hall", [noble, sealed], Hall). JSON asset. |
-| 2.5 | **Slot Filler** | Given a pattern + vocabulary, instantiate each slot: pick a vocabulary entry matching the slot's role, assign label/tags/archetype. RNG for variety across runs. |
-| 2.6 | **Constraint Inference** | Pattern metadata declares constraint shapes. Lock-and-key → emit `MustGate`. Hub-and-spoke with required spoke → emit `MustConnect`. |
-| 2.7 | **GenericIntentBuilder** | Implement `IntentBuilder` using selector + filler + constraint inference. One builder for all situations. |
-| 2.8 | **Regression tests** | Given crypt/tavern situations, `GenericIntentBuilder` produces graphs with the same structural shape (same role counts, same edge types) as the fixtures. |
+**Key insight:** Patterns encode *only topology* (slots + edge roles + votes). Everything else—constraints, location kind, scale, motifs—is *inferred* from the filled graph structure and theme vocabulary. A pattern author never writes redundant constraint declarations; the system derives them from the topology.
+
+| # | Task | Status | Description |
+|---|---|---|---|
+| 2.1 | **NarrativePattern data model** | ✅ | A pattern is a parameterized graph template: named slots with role constraints, edges with traversal types, vote metadata. JSON-serializable. Patterns declare topology only—no explicit constraint arrays for structurally-inferable invariants. |
+| 2.2 | **Pattern library** | ✅ | 5 starter patterns as JSON asset with embedded fallback: lock-and-key, hub-and-spoke, linear-descent, gauntlet, branching-exploration. |
+| 2.3 | **Pattern Selector** | ✅ | Situation tags have weighted votes for patterns. Highest-scoring pattern wins (with RNG tiebreaking). |
+| 2.4 | **Theme Vocabulary** | ✅ | Maps `(role, theme)` → list of `{label, tags, archetype}` tuples. Two starter themes (undead_nobility, urban_underground). Also carries theme-level metadata: `location_kind` and `motifs`. |
+| 2.5 | **Slot Filler** | ✅ | Given a pattern + vocabulary, instantiate each slot: pick a vocabulary entry matching the slot's role, assign label/tags/archetype. Optional slots included via RNG. Returns a ScenarioGraph (no constraints). |
+| 2.6 | **Structural Constraint Inference** | ✅ | Scan the *filled ScenarioGraph* and derive constraints from topology: Gate-role node + RestrictedTraversal outgoing edge → emit `MustGate`. Required node off Hub via Traversal → emit `MustConnect`. Graph depth from Entry → emit `MaxDepth`. Pattern-level `max_depth` override honored when present. |
+| 2.7 | **GenericIntentBuilder** | ✅ | Implement `IntentBuilder` that orchestrates: (a) select pattern, (b) look up vocabulary from `bindings["theme"]`, (c) fill slots, (d) infer constraints from filled graph, (e) infer `location_kind` + `scale` + `motifs` from vocabulary metadata + filled node count. One builder for all situations. |
+| 2.8 | **Regression tests** | ✅ | Given crypt/tavern situations, `GenericIntentBuilder` produces graphs with the same structural shape (same role counts, same edge types) as the fixture builders. Constraints match structural expectations. `main.rs` wired to use `GenericIntentBuilder` for all scenarios. |
 
 **Design decisions:**
 - Patterns are *topological*, not geometric. They define what connects to what, not where.
+- Patterns declare **only** non-inferable metadata: `max_depth` override, votes. Structurally-obvious constraints (`MustGate`) are auto-derived from the filled graph.
 - Theme vocabularies are the primary variety knob. Adding a scenario = adding vocabulary entries + situation tags.
-- Existing demo fixtures (`CryptIntentBuilder`, `TavernIntentBuilder`) remain as regression baselines — they're never deleted.
+- The vocabulary also provides `location_kind` and `motifs` so the builder doesn't need heuristics for those.
+- `scale` is inferred from the filled graph size (node count mapped to MapScale).
+- Existing demo fixtures (`CryptIntentBuilder`, `TavernIntentBuilder`) were removed after regression tests confirmed the generic builder produces equivalent output. Demo files now contain only situation factories.
 
 **Exit criterion:** `cargo run` with a `GenericIntentBuilder` + crypt situation produces a valid, thematically coherent dungeon indistinguishable in quality from the fixture version.
 

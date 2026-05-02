@@ -53,20 +53,20 @@ pub struct EntityRule {
 impl EntityRule {
     /// Does this rule apply to the given space?
     pub fn matches(&self, spec: &SpaceSpec) -> bool {
-        if let Some(role) = self.role_match {
-            if spec.role != role {
-                return false;
-            }
+        if let Some(role) = self.role_match
+            && spec.role != role
+        {
+            return false;
         }
-        if let Some(archetype) = self.archetype_match {
-            if spec.archetype != Some(archetype) {
-                return false;
-            }
+        if let Some(archetype) = self.archetype_match
+            && spec.archetype != Some(archetype)
+        {
+            return false;
         }
-        if let Some(ref tag) = self.tag_match {
-            if !spec.tags.contains(tag) {
-                return false;
-            }
+        if let Some(ref tag) = self.tag_match
+            && !spec.tags.contains(tag)
+        {
+            return false;
         }
         true
     }

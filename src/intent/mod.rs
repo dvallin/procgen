@@ -1,5 +1,11 @@
 pub mod builder;
+pub mod constraints;
+pub mod filler;
+pub mod generic_builder;
 pub mod graph;
 pub mod instantiate;
 pub mod map_intent;
+pub mod pattern;
+pub mod selector;
 pub mod template;
+pub mod vocabulary;

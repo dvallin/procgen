@@ -54,16 +54,16 @@ impl<'a> Validator<EntityValidationInput<'a>> for EntityValidator {
 fn check_walkable(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
     for entity in &plan.entities {
         let pos = entity.position;
-        if let Some(tile) = tiles.get(pos.x, pos.y) {
-            if tile.is_solid() {
-                issues.push(ValidationIssue {
-                    severity: Severity::Error,
-                    message: format!(
-                        "entity \"{}\" at ({}, {}) in space {:?} is on a non-walkable tile ({:?})",
-                        entity.archetype, pos.x, pos.y, entity.space_id, tile
-                    ),
-                });
-            }
+        if let Some(tile) = tiles.get(pos.x, pos.y)
+            && tile.is_solid()
+        {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                message: format!(
+                    "entity \"{}\" at ({}, {}) in space {:?} is on a non-walkable tile ({:?})",
+                    entity.archetype, pos.x, pos.y, entity.space_id, tile
+                ),
+            });
         }
     }
 }
@@ -162,17 +162,17 @@ fn check_patrol_walkability(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec
     for entity in &plan.entities {
         if let Some(zone) = &entity.patrol_zone {
             for &cell in zone {
-                if let Some(tile) = tiles.get(cell.x, cell.y) {
-                    if !tile.is_walkable() {
-                        issues.push(ValidationIssue {
-                            severity: Severity::Warning,
-                            message: format!(
-                                "entity \"{}\" at ({}, {}) has non-walkable patrol zone cell ({}, {}) ({:?})",
-                                entity.archetype, entity.position.x, entity.position.y,
-                                cell.x, cell.y, tile
-                            ),
-                        });
-                    }
+                if let Some(tile) = tiles.get(cell.x, cell.y)
+                    && !tile.is_walkable()
+                {
+                    issues.push(ValidationIssue {
+                        severity: Severity::Warning,
+                        message: format!(
+                            "entity \"{}\" at ({}, {}) has non-walkable patrol zone cell ({}, {}) ({:?})",
+                            entity.archetype, entity.position.x, entity.position.y,
+                            cell.x, cell.y, tile
+                        ),
+                    });
                 }
             }
         }
@@ -222,16 +222,16 @@ fn check_required_entities(
 fn check_door_tile(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
     for entity in &plan.entities {
         let pos = entity.position;
-        if let Some(tile) = tiles.get(pos.x, pos.y) {
-            if matches!(tile, Tile::Door | Tile::LockedDoor) {
-                issues.push(ValidationIssue {
-                    severity: Severity::Warning,
-                    message: format!(
-                        "entity \"{}\" at ({}, {}) in space {:?} is on a door tile",
-                        entity.archetype, pos.x, pos.y, entity.space_id
-                    ),
-                });
-            }
+        if let Some(tile) = tiles.get(pos.x, pos.y)
+            && matches!(tile, Tile::Door | Tile::LockedDoor)
+        {
+            issues.push(ValidationIssue {
+                severity: Severity::Warning,
+                message: format!(
+                    "entity \"{}\" at ({}, {}) in space {:?} is on a door tile",
+                    entity.archetype, pos.x, pos.y, entity.space_id
+                ),
+            });
         }
     }
 }

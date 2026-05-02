@@ -102,7 +102,7 @@ impl EntityPlanner for SimpleEntityPlanner {
                 continue;
             }
 
-            let matched = matching_entity_rules(&rules, spec);
+            let matched = matching_entity_rules(rules, spec);
             if matched.is_empty() {
                 debug!(
                     space_id = ?placed.space_id,
@@ -131,16 +131,20 @@ impl EntityPlanner for SimpleEntityPlanner {
                 .cloned()
                 .unwrap_or_default();
 
+            let room_ctx = RoomContext {
+                space_id: placed.space_id,
+                rect,
+                tiles,
+                room_features: &room_features,
+                density_cap,
+            };
+
             for rule in &matched {
                 let placed_count = place_entity_rule(
                     rule,
-                    placed.space_id,
-                    rect,
-                    tiles,
+                    &room_ctx,
                     &mut room_occupied,
                     &mut entities,
-                    &room_features,
-                    density_cap,
                     room_entity_count,
                     rng,
                 )?;
@@ -177,19 +181,24 @@ fn compute_density_cap(tiles: &TileMap, rect: Rect) -> u32 {
     (walkable / 4).max(1)
 }
 
+/// Immutable context for a single room during entity placement.
+struct RoomContext<'a> {
+    space_id: SpaceId,
+    rect: Rect,
+    tiles: &'a TileMap,
+    room_features: &'a [(FeatureKind, Point)],
+    density_cap: u32,
+}
+
 /// Try to place up to `rule.max_count` entities in a room.
 ///
 /// Returns the number of entities actually placed. If the rule's `min_count > 0`
 /// and no candidate position could be found, returns an error.
 fn place_entity_rule(
     rule: &EntityRule,
-    space_id: SpaceId,
-    rect: Rect,
-    tiles: &TileMap,
+    ctx: &RoomContext,
     occupied: &mut HashSet<Point>,
     entities: &mut Vec<EntityPlacement>,
-    room_features: &[(FeatureKind, Point)],
-    density_cap: u32,
     current_count: u32,
     rng: &mut dyn rand::RngCore,
 ) -> Result<u32, EntityPlanError> {
@@ -197,24 +206,30 @@ fn place_entity_rule(
 
     for _ in 0..rule.max_count {
         // Check density cap before each placement attempt.
-        if current_count + placed >= density_cap {
+        if current_count + placed >= ctx.density_cap {
             if placed == 0 && rule.min_count > 0 {
                 return Err(EntityPlanError::DensityExceeded {
-                    space_id,
-                    max: density_cap,
+                    space_id: ctx.space_id,
+                    max: ctx.density_cap,
                     actual: current_count + rule.min_count,
                 });
             }
             break;
         }
 
-        let candidate =
-            pick_entity_candidate(&rule.placement, tiles, rect, occupied, room_features, rng);
+        let candidate = pick_entity_candidate(
+            &rule.placement,
+            ctx.tiles,
+            ctx.rect,
+            occupied,
+            ctx.room_features,
+            rng,
+        );
 
         match candidate {
             Some(point) => {
                 let patrol_zone = if rule.patrol {
-                    Some(compute_patrol_zone(point, tiles, rect, occupied))
+                    Some(compute_patrol_zone(point, ctx.tiles, ctx.rect, occupied))
                 } else {
                     None
                 };
@@ -223,7 +238,7 @@ fn place_entity_rule(
                 entities.push(EntityPlacement {
                     archetype: rule.archetype.clone(),
                     position: point,
-                    space_id,
+                    space_id: ctx.space_id,
                     behavior_tags: rule.behavior_tags.clone(),
                     patrol_zone,
                 });
@@ -231,7 +246,9 @@ fn place_entity_rule(
             }
             None => {
                 if placed == 0 && rule.min_count > 0 {
-                    return Err(EntityPlanError::NoWalkableTiles { space_id });
+                    return Err(EntityPlanError::NoWalkableTiles {
+                        space_id: ctx.space_id,
+                    });
                 }
                 break;
             }

@@ -1,0 +1,235 @@
+[
+  {
+    "id": "undead_nobility",
+    "name": "Undead Nobility",
+    "description": "Ancient noble crypts and sealed burial grounds, haunted by the remnants of a once-great family.",
+    "location_kind": "Dungeon",
+    "motifs": ["gothic", "stone", "decay"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "Breach",
+            "tags": ["noble", "sealed"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Crypt Entrance",
+            "tags": ["stone", "dark"],
+            "archetype": "Corridor"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Great Hall",
+            "tags": ["noble", "sealed"],
+            "archetype": "Hall"
+          },
+          {
+            "label": "Ossuary",
+            "tags": ["bones", "ancient"],
+            "archetype": "Hall"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Sealed Crypt Door",
+            "tags": ["locked"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Iron Portcullis",
+            "tags": ["locked", "rusted"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Family Vault",
+            "tags": ["main_goal"],
+            "archetype": "Vault"
+          },
+          {
+            "label": "Chapel Vestry",
+            "tags": ["optional", "contains_key"],
+            "archetype": "Workshop"
+          },
+          {
+            "label": "Inner Sanctum",
+            "tags": ["main_goal", "sacred"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Reward",
+        "entries": [
+          {
+            "label": "Reliquary",
+            "tags": ["optional", "sacred"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Hidden Treasury",
+            "tags": ["optional", "valuable"],
+            "archetype": "Vault"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Side Chapel",
+            "tags": ["optional", "sacred"],
+            "archetype": "Workshop"
+          },
+          {
+            "label": "Burial Alcove",
+            "tags": ["optional", "bones"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Descending Passage",
+            "tags": ["dark", "narrow"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Crypt Gallery",
+            "tags": ["stone", "noble"],
+            "archetype": "Corridor"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "urban_underground",
+    "name": "Urban Underground",
+    "description": "Damp cellars and hidden tunnels beneath a dock-district tavern, used for smuggling and secret storage.",
+    "location_kind": "Building",
+    "motifs": ["timber", "damp", "brick"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "Cellar Stairs",
+            "tags": ["narrow", "wooden"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Trapdoor Landing",
+            "tags": ["hidden", "cramped"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Taproom Cellar",
+            "tags": ["barrels", "damp"],
+            "archetype": "Hall"
+          },
+          {
+            "label": "Storage Basement",
+            "tags": ["crates", "dusty"],
+            "archetype": "Hall"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Cold Room",
+            "tags": ["hidden"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Locked Storeroom",
+            "tags": ["locked", "sturdy"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Wine Store",
+            "tags": ["main_goal", "valuable"],
+            "archetype": "Vault"
+          },
+          {
+            "label": "Contraband Cache",
+            "tags": ["main_goal", "smuggling"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Reward",
+        "entries": [
+          {
+            "label": "Smuggler's Tunnel",
+            "tags": ["secret", "smuggling"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Hidden Stash",
+            "tags": ["secret", "valuable"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Pantry",
+            "tags": ["optional", "food"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Coal Store",
+            "tags": ["optional", "dusty"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Damp Passage",
+            "tags": ["damp", "narrow"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Service Tunnel",
+            "tags": ["dark", "brick"],
+            "archetype": "Corridor"
+          }
+        ]
+      }
+    ]
+  }
+]

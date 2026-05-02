@@ -1,0 +1,136 @@
+[
+  {
+    "id": "lock_and_key",
+    "name": "Lock and Key",
+    "description": "Entry leads to a hub, which gates a goal behind a lock. Optional branches off the hub provide key areas and bonus rewards. The classic crypt shape.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "hub", "role": "Hub", "optional": false },
+      { "key": "key_area", "role": "Goal", "optional": true },
+      { "key": "gate", "role": "Gate", "optional": false },
+      { "key": "goal", "role": "Goal", "optional": false },
+      { "key": "reward", "role": "Reward", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "hub", "role": "Traversal" },
+      { "from": "hub", "to": "gate", "role": "Traversal" },
+      { "from": "gate", "to": "goal", "role": "RestrictedTraversal" },
+      { "from": "hub", "to": "key_area", "role": "OptionalTraversal" },
+      { "from": "hub", "to": "reward", "role": "OptionalTraversal" }
+    ],
+    "votes": [
+      { "tag": "locked_vault", "weight": 3 },
+      { "tag": "sealed_crypt", "weight": 2 },
+      { "tag": "guarded", "weight": 1 }
+    ]
+  },
+  {
+    "id": "hub_and_spoke",
+    "name": "Hub and Spoke",
+    "description": "A central hub with multiple radiating paths, some optional, and a hidden secret area. Suits open, social, or marketplace spaces like taverns and docks.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "hub", "role": "Hub", "optional": false },
+      { "key": "spoke_1", "role": "Goal", "optional": false },
+      { "key": "spoke_2", "role": "Branch", "optional": true },
+      { "key": "spoke_3", "role": "Branch", "optional": true },
+      { "key": "hidden", "role": "Reward", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "hub", "role": "Traversal" },
+      { "from": "hub", "to": "spoke_1", "role": "Traversal" },
+      { "from": "hub", "to": "spoke_2", "role": "OptionalTraversal" },
+      { "from": "hub", "to": "spoke_3", "role": "OptionalTraversal" },
+      { "from": "hub", "to": "hidden", "role": "SecretTraversal" }
+    ],
+    "votes": [
+      { "tag": "tavern", "weight": 2 },
+      { "tag": "open_cavern", "weight": 2 },
+      { "tag": "marketplace", "weight": 1 },
+      { "tag": "dock_district", "weight": 1 }
+    ]
+  },
+  {
+    "id": "linear_descent",
+    "name": "Linear Descent",
+    "description": "A chain of passages with increasing danger, culminating in a gated final depth. An optional cache branches off before the gate. Ideal for mines, tunnels, and corridors.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "passage_1", "role": "Transition", "optional": false },
+      { "key": "passage_2", "role": "Transition", "optional": false },
+      { "key": "gate", "role": "Gate", "optional": false },
+      { "key": "depths", "role": "Goal", "optional": false },
+      { "key": "cache", "role": "Reward", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "passage_1", "role": "Traversal" },
+      { "from": "passage_1", "to": "passage_2", "role": "Traversal" },
+      { "from": "passage_2", "to": "gate", "role": "Traversal" },
+      { "from": "gate", "to": "depths", "role": "RestrictedTraversal" },
+      { "from": "passage_2", "to": "cache", "role": "OptionalTraversal" }
+    ],
+    "max_depth": 5,
+    "votes": [
+      { "tag": "descent", "weight": 3 },
+      { "tag": "mine", "weight": 2 },
+      { "tag": "tunnel", "weight": 2 },
+      { "tag": "corridor", "weight": 1 }
+    ]
+  },
+  {
+    "id": "gauntlet",
+    "name": "Gauntlet",
+    "description": "A linear sequence of gated challenges. Two gates must be overcome in order, with an optional reward branching off the central challenge room. Built for trapped halls, arenas, and trials.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "ante_chamber", "role": "Transition", "optional": false },
+      { "key": "gate_1", "role": "Gate", "optional": false },
+      { "key": "challenge", "role": "Hub", "optional": false },
+      { "key": "gate_2", "role": "Gate", "optional": false },
+      { "key": "goal", "role": "Goal", "optional": false },
+      { "key": "reward", "role": "Reward", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "ante_chamber", "role": "Traversal" },
+      { "from": "ante_chamber", "to": "gate_1", "role": "Traversal" },
+      { "from": "gate_1", "to": "challenge", "role": "RestrictedTraversal" },
+      { "from": "challenge", "to": "gate_2", "role": "Traversal" },
+      { "from": "gate_2", "to": "goal", "role": "RestrictedTraversal" },
+      { "from": "challenge", "to": "reward", "role": "OptionalTraversal" }
+    ],
+    "votes": [
+      { "tag": "guarded", "weight": 2 },
+      { "tag": "trapped", "weight": 3 },
+      { "tag": "trial", "weight": 2 },
+      { "tag": "arena", "weight": 1 }
+    ]
+  },
+  {
+    "id": "branching_exploration",
+    "name": "Branching Exploration",
+    "description": "A hub splits into multiple branching paths, each with its own sub-structure. A secret shortcut connects deeper areas. Perfect for sprawling ruins and cavern networks.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "hub", "role": "Hub", "optional": false },
+      { "key": "branch_a", "role": "Branch", "optional": false },
+      { "key": "branch_b", "role": "Branch", "optional": false },
+      { "key": "branch_a_end", "role": "Goal", "optional": false },
+      { "key": "branch_b_end", "role": "Reward", "optional": true },
+      { "key": "shortcut", "role": "Transition", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "hub", "role": "Traversal" },
+      { "from": "hub", "to": "branch_a", "role": "Traversal" },
+      { "from": "hub", "to": "branch_b", "role": "OptionalTraversal" },
+      { "from": "branch_a", "to": "branch_a_end", "role": "Traversal" },
+      { "from": "branch_b", "to": "branch_b_end", "role": "Traversal" },
+      { "from": "branch_a_end", "to": "shortcut", "role": "SecretTraversal" }
+    ],
+    "votes": [
+      { "tag": "exploration", "weight": 3 },
+      { "tag": "sprawling", "weight": 2 },
+      { "tag": "ruins", "weight": 1 },
+      { "tag": "cavern", "weight": 1 }
+    ]
+  }
+]

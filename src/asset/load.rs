@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use crate::entity::rules::EntityRule;
 use crate::feature::rules::FeatureRule;
+use crate::intent::pattern::NarrativePattern;
+use crate::intent::vocabulary::ThemeVocabulary;
 
 // ─── Embedded defaults (compiled into the binary) ───────────────────────────
 
@@ -19,6 +21,12 @@ const EMBEDDED_FEATURE_RULES: &str = include_str!("../../assets/rules/features.j
 
 /// Default entity rules, embedded at compile time.
 const EMBEDDED_ENTITY_RULES: &str = include_str!("../../assets/rules/entities.json");
+
+/// Default narrative patterns, embedded at compile time.
+const EMBEDDED_NARRATIVE_PATTERNS: &str = include_str!("../../assets/patterns/narrative.json");
+
+/// Default theme vocabularies, embedded at compile time.
+const EMBEDDED_THEME_VOCABULARIES: &str = include_str!("../../assets/vocabularies/themes.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -136,6 +144,12 @@ pub const DEFAULT_FEATURE_RULES_PATH: &str = "assets/rules/features.json";
 /// Default file path for entity rules, relative to the working directory.
 pub const DEFAULT_ENTITY_RULES_PATH: &str = "assets/rules/entities.json";
 
+/// Default file path for narrative patterns, relative to the working directory.
+pub const DEFAULT_PATTERNS_PATH: &str = "assets/patterns/narrative.json";
+
+/// Default file path for theme vocabularies, relative to the working directory.
+pub const DEFAULT_VOCABULARIES_PATH: &str = "assets/vocabularies/themes.json";
+
 /// Load the default feature rules.
 ///
 /// Tries `assets/rules/features.json` on disk first, falls back to
@@ -150,6 +164,22 @@ pub fn load_default_feature_rules() -> Result<Vec<FeatureRule>, AssetLoadError> 
 /// the compiled-in version if the file doesn't exist.
 pub fn load_default_entity_rules() -> Result<Vec<EntityRule>, AssetLoadError> {
     load_rules_with_fallback(DEFAULT_ENTITY_RULES_PATH, EMBEDDED_ENTITY_RULES)
+}
+
+/// Load the default narrative patterns.
+///
+/// Tries `assets/patterns/narrative.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_patterns() -> Result<Vec<NarrativePattern>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_PATTERNS_PATH, EMBEDDED_NARRATIVE_PATTERNS)
+}
+
+/// Load the default theme vocabularies.
+///
+/// Tries `assets/vocabularies/themes.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_vocabularies() -> Result<Vec<ThemeVocabulary>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_VOCABULARIES_PATH, EMBEDDED_THEME_VOCABULARIES)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -269,5 +299,159 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("test.json"));
         assert!(msg.contains("parse"));
+    }
+
+    #[test]
+    fn load_embedded_patterns_succeeds() {
+        let patterns = load_default_patterns().unwrap();
+        assert_eq!(patterns.len(), 5);
+
+        // Verify pattern IDs.
+        let ids: Vec<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
+        assert!(ids.contains(&"lock_and_key"));
+        assert!(ids.contains(&"hub_and_spoke"));
+        assert!(ids.contains(&"linear_descent"));
+        assert!(ids.contains(&"gauntlet"));
+        assert!(ids.contains(&"branching_exploration"));
+    }
+
+    #[test]
+    fn lock_and_key_pattern_structure() {
+        use crate::intent::graph::EdgeRole;
+
+        let patterns = load_default_patterns().unwrap();
+        let lak = patterns.iter().find(|p| p.id == "lock_and_key").unwrap();
+
+        // Should have 6 slots: entry, hub, key_area (optional), gate, goal, reward (optional)
+        assert_eq!(lak.slots.len(), 6);
+        let optional_count = lak.slots.iter().filter(|s| s.optional).count();
+        assert_eq!(optional_count, 2);
+
+        // Should have 5 edges.
+        assert_eq!(lak.edges.len(), 5);
+
+        // Gate→goal edge should be RestrictedTraversal.
+        let gate_goal = lak
+            .edges
+            .iter()
+            .find(|e| e.from == "gate" && e.to == "goal");
+        assert!(gate_goal.is_some());
+        assert_eq!(gate_goal.unwrap().role, EdgeRole::RestrictedTraversal);
+
+        // No max_depth for lock_and_key.
+        assert_eq!(lak.max_depth, None);
+
+        // Should have votes.
+        assert!(!lak.votes.is_empty());
+        let vault_vote = lak.votes.iter().find(|v| v.tag == "locked_vault");
+        assert!(vault_vote.is_some());
+        assert_eq!(vault_vote.unwrap().weight, 3);
+    }
+
+    #[test]
+    fn all_patterns_have_entry_slot() {
+        let patterns = load_default_patterns().unwrap();
+        for pattern in &patterns {
+            let has_entry = pattern.slots.iter().any(|s| s.role == NodeRole::Entry);
+            assert!(
+                has_entry,
+                "pattern '{}' is missing an Entry slot",
+                pattern.id
+            );
+        }
+    }
+
+    #[test]
+    fn all_pattern_edges_reference_valid_slots() {
+        let patterns = load_default_patterns().unwrap();
+        for pattern in &patterns {
+            let keys: Vec<&str> = pattern.slots.iter().map(|s| s.key.as_str()).collect();
+            for edge in &pattern.edges {
+                assert!(
+                    keys.contains(&edge.from.as_str()),
+                    "pattern '{}' edge references unknown slot '{}'",
+                    pattern.id,
+                    edge.from
+                );
+                assert!(
+                    keys.contains(&edge.to.as_str()),
+                    "pattern '{}' edge references unknown slot '{}'",
+                    pattern.id,
+                    edge.to
+                );
+            }
+        }
+    }
+
+    // ─── Vocabulary tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn load_embedded_vocabularies_succeeds() {
+        let vocabs = load_default_vocabularies().unwrap();
+        assert_eq!(vocabs.len(), 2);
+
+        let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
+        assert!(ids.contains(&"undead_nobility"));
+        assert!(ids.contains(&"urban_underground"));
+    }
+
+    #[test]
+    fn undead_nobility_has_all_roles() {
+        let vocabs = load_default_vocabularies().unwrap();
+        let undead = vocabs.iter().find(|v| v.id == "undead_nobility").unwrap();
+
+        // Should have entries for all 7 roles.
+        let roles: Vec<NodeRole> = undead.roles.iter().map(|r| r.role).collect();
+        assert!(roles.contains(&NodeRole::Entry));
+        assert!(roles.contains(&NodeRole::Hub));
+        assert!(roles.contains(&NodeRole::Gate));
+        assert!(roles.contains(&NodeRole::Goal));
+        assert!(roles.contains(&NodeRole::Reward));
+        assert!(roles.contains(&NodeRole::Branch));
+        assert!(roles.contains(&NodeRole::Transition));
+    }
+
+    #[test]
+    fn urban_underground_has_all_roles() {
+        let vocabs = load_default_vocabularies().unwrap();
+        let urban = vocabs.iter().find(|v| v.id == "urban_underground").unwrap();
+
+        let roles: Vec<NodeRole> = urban.roles.iter().map(|r| r.role).collect();
+        assert!(roles.contains(&NodeRole::Entry));
+        assert!(roles.contains(&NodeRole::Hub));
+        assert!(roles.contains(&NodeRole::Gate));
+        assert!(roles.contains(&NodeRole::Goal));
+        assert!(roles.contains(&NodeRole::Reward));
+        assert!(roles.contains(&NodeRole::Branch));
+        assert!(roles.contains(&NodeRole::Transition));
+    }
+
+    #[test]
+    fn entries_for_role_filters_correctly() {
+        let vocabs = load_default_vocabularies().unwrap();
+        let undead = vocabs.iter().find(|v| v.id == "undead_nobility").unwrap();
+
+        let hub_entries = undead.entries_for_role(NodeRole::Hub);
+        assert_eq!(hub_entries.len(), 2);
+        let labels: Vec<&str> = hub_entries.iter().map(|e| e.label.as_str()).collect();
+        assert!(labels.contains(&"Great Hall"));
+        assert!(labels.contains(&"Ossuary"));
+    }
+
+    #[test]
+    fn all_vocabulary_entries_have_non_empty_labels() {
+        let vocabs = load_default_vocabularies().unwrap();
+        for vocab in &vocabs {
+            for role_vocab in &vocab.roles {
+                for entry in &role_vocab.entries {
+                    assert!(
+                        !entry.label.is_empty(),
+                        "vocabulary '{}' role {:?} has empty label",
+                        vocab.id,
+                        role_vocab.role
+                    );
+                }
+            }
+        }
     }
 }

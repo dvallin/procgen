@@ -1,3 +1,5 @@
+use rand::rngs::StdRng;
+
 use crate::situation::SituationContext;
 
 use super::map_intent::MapIntent;
@@ -21,5 +23,9 @@ impl std::error::Error for IntentBuildError {}
 
 /// Converts a SituationContext into a MapIntent.
 pub trait IntentBuilder {
-    fn build(&self, situation: &SituationContext) -> Result<MapIntent, IntentBuildError>;
+    fn build(
+        &self,
+        situation: &SituationContext,
+        rng: &mut StdRng,
+    ) -> Result<MapIntent, IntentBuildError>;
 }

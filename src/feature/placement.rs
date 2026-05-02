@@ -83,14 +83,10 @@ pub fn find_corner_tiles(map: &TileMap, rect: Rect, occupied: &HashSet<Point>) -
         .filter(|p| map.get(p.x, p.y) == Some(Tile::Floor))
         .filter(|p| !is_door_adjacent(map, *p))
         .filter(|p| {
-            let near_north_wall =
-                (1..=2).any(|dy| map.get(p.x, p.y - dy).map_or(false, |t| t == Tile::Wall));
-            let near_south_wall =
-                (1..=2).any(|dy| map.get(p.x, p.y + dy).map_or(false, |t| t == Tile::Wall));
-            let near_west_wall =
-                (1..=2).any(|dx| map.get(p.x - dx, p.y).map_or(false, |t| t == Tile::Wall));
-            let near_east_wall =
-                (1..=2).any(|dx| map.get(p.x + dx, p.y).map_or(false, |t| t == Tile::Wall));
+            let near_north_wall = (1..=2).any(|dy| map.get(p.x, p.y - dy) == Some(Tile::Wall));
+            let near_south_wall = (1..=2).any(|dy| map.get(p.x, p.y + dy) == Some(Tile::Wall));
+            let near_west_wall = (1..=2).any(|dx| map.get(p.x - dx, p.y) == Some(Tile::Wall));
+            let near_east_wall = (1..=2).any(|dx| map.get(p.x + dx, p.y) == Some(Tile::Wall));
 
             let near_vertical_wall = near_north_wall || near_south_wall;
             let near_horizontal_wall = near_west_wall || near_east_wall;

@@ -1,8 +1,9 @@
 use crate::intent::graph::ScenarioGraph;
 use crate::tag::Tag;
+use serde::{Deserialize, Serialize};
 
 /// What kind of location this map represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LocationKind {
     Dungeon,
     Building,

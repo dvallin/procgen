@@ -6,7 +6,13 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with property-based and integration tests. Two demo scenarios (`src/demo/crypt.rs`, `src/demo/tavern.rs`) flow through the full pipeline and produce ASCII output. Phase 1 (module restructure + Tag newtype), Phase 2 (MapIntent + SituationContext), Phase 3 (enrich SpatialPlan + generic geometry), Phase 4 (real geometry placement), Phase 5 (FeaturePlan), Phase 6 (EntityPlan), and Phase 7 (Pipeline Runner + Validation Loop) are complete — Footprint abstraction, routing extraction, GeometryValidator, constraint-aware placement, face-based corridor merging, validator-backed retry loop, stress tests, feature data model, placement strategies, mapping rules, planner trait+impl, ASCII feature overlay, feature validator, entity data model, spawn rules, entity planner with patrol zones, ASCII entity overlay, entity validator, pipeline wiring, reusable Pipeline runner with PipelineConfig, seeded RNG (StdRng) threaded through planners, deterministic --seed flag, retry loop with RelaxationStrategy, and unified PipelineError all done. Phase 1 of the new roadmap (Data-Driven Rules & Asset Loading) is in progress — tasks 1.1–1.5 complete (JSON schemas, asset loader with embedded fallback, `default_rules()` as thin loaders, PipelineConfig accepts rule overrides).
+Working vertical slice with full pipeline, property-based tests, and integration tests. Two demo scenarios (crypt, tavern) produce ASCII output. All intent generation is data-driven — no hard-coded builders remain.
+
+**Completed phases (original build-out):** Module restructure, Tag newtype, MapIntent + SituationContext, SpatialPlan + generic geometry, real geometry placement (footprints, routing, corridor merging, constraint-aware layout), FeaturePlan, EntityPlan, Pipeline Runner + Validation Loop (retry, relaxation, seeded RNG).
+
+**Completed phases (new roadmap):**
+- **Phase 1 — Data-Driven Rules & Asset Loading** (tasks 1.1–1.5): Feature/entity rules as JSON assets with embedded fallback, generic asset loader, PipelineConfig overrides.
+- **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
 
 ## Pipeline (current)
 
@@ -24,15 +30,21 @@ src/
 ├── lib.rs               # Crate root, re-exports modules
 ├── tag.rs               # Tag newtype (wraps String)
 ├── pipeline.rs          # Pipeline runner, PipelineConfig, PipelineError, retry loop + seeded RNG
-├── demo/                # Hardcoded demo scenarios
-│   ├── crypt.rs         # Noble crypt: situation → intent → pipeline
-│   └── tavern.rs        # Tavern cellar: different topology + archetypes
+├── demo/                # Scenario situation factories
+│   ├── crypt.rs         # build_crypt_situation() → SituationContext
+│   └── tavern.rs        # build_tavern_situation() → SituationContext
 ├── situation/           # World/narrative context
 │   └── mod.rs           # SituationContext struct + builder methods
 ├── intent/              # Map intent / structural graph
 │   ├── graph.rs         # ScenarioGraph, ScenarioNode, ScenarioEdge
 │   ├── map_intent.rs    # MapIntent, LocationKind, MapScale, IntentConstraint
 │   ├── builder.rs       # IntentBuilder trait, IntentBuildError
+│   ├── pattern.rs       # NarrativePattern, PatternSlot, PatternEdge, PatternVote
+│   ├── selector.rs      # score_pattern, rank_patterns, select_pattern (weighted voting + RNG tiebreak)
+│   ├── vocabulary.rs    # ThemeVocabulary, RoleVocabulary, VocabularyEntry
+│   ├── filler.rs        # fill_pattern: slot instantiation with vocabulary + RNG
+│   ├── constraints.rs   # infer_constraints: structural MustGate + MaxDepth from filled graph
+│   ├── generic_builder.rs # GenericIntentBuilder: data-driven IntentBuilder impl
 │   ├── template.rs      # Serde-friendly template asset types
 │   └── instantiate.rs   # Template → ScenarioGraph conversion
 ├── spatial/             # Abstract spatial planning
@@ -64,12 +76,17 @@ src/
     └── load.rs
 
 assets/
+├── patterns/
+│   └── narrative.json   # Narrative patterns (5 starter patterns, embedded fallback)
+├── vocabularies/
+│   └── themes.json      # Theme vocabularies (undead_nobility, urban_underground)
 └── rules/
     ├── features.json    # Default feature rules (serde JSON, embedded fallback)
     └── entities.json    # Default entity rules (serde JSON, embedded fallback)
 
 tests/
-└── integration.rs       # End-to-end pipeline tests (connectivity, overlaps, etc.)
+├── integration.rs       # End-to-end pipeline tests (connectivity, overlaps, etc.)
+└── generic_builder_regression.rs  # Regression tests: GenericIntentBuilder vs fixture builders
 ```
 
 ## Key Utility Methods
@@ -111,7 +128,7 @@ cargo run -- --trace debug         # DEBUG-level (placement details, routing dec
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (213 currently: 157 unit/proptest + 54 integration + 2 doctests)
+cargo test       # Runs all tests (289 currently: 210 unit/proptest + 23 regression + 54 integration + 3 doctests)
 ```
 
 ## Target Architecture

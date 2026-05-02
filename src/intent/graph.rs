@@ -1,3 +1,4 @@
+use crate::spatial::plan::SpaceArchetype;
 use crate::tag::Tag;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,9 @@ pub struct ScenarioNode {
     pub role: NodeRole,
     pub tags: Vec<Tag>,
     pub label: Option<String>,
+    /// Optional archetype hint from vocabulary. When present, the spatial planner
+    /// uses this instead of deriving archetype from role.
+    pub archetype_hint: Option<SpaceArchetype>,
 }
 
 #[derive(Debug, Clone)]

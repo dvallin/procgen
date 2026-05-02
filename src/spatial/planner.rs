@@ -46,7 +46,9 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             mapping.insert(node.id, id);
 
             // Derive archetype and size hint from the node's role.
-            let archetype = default_archetype_for_role(node.role);
+            let archetype = node
+                .archetype_hint
+                .or_else(|| default_archetype_for_role(node.role));
             let size_hint = default_size_hint_for_role(node.role);
 
             // Resolve concrete dimensions from size_hint + archetype.
@@ -365,6 +367,7 @@ mod tests {
                     role,
                     tags,
                     label: Some(format!("Node {}", i)),
+                    archetype_hint: None,
                 })
                 .collect();
 

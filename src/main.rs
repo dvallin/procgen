@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 
-use procgen::demo::crypt::{CryptIntentBuilder, build_crypt_situation};
-use procgen::demo::tavern::{TavernIntentBuilder, build_tavern_situation};
+use procgen::demo::crypt::build_crypt_situation;
+use procgen::demo::tavern::build_tavern_situation;
 use procgen::pipeline::{Pipeline, PipelineConfig};
 use procgen::tile::ascii::render_ascii_with_entities;
 use tracing_subscriber::EnvFilter;
@@ -65,12 +65,12 @@ fn main() {
         Scenario::Crypt => {
             let situation = build_crypt_situation();
             println!("=== Noble Crypt ===\n");
-            pipeline.run(&situation, &CryptIntentBuilder)
+            pipeline.run(&situation)
         }
         Scenario::Tavern => {
             let situation = build_tavern_situation();
             println!("=== Tavern Cellar ===\n");
-            pipeline.run(&situation, &TavernIntentBuilder)
+            pipeline.run(&situation)
         }
     };
 

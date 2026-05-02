@@ -70,7 +70,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
                 continue;
             };
 
-            let matched = matching_rules(&rules, spec);
+            let matched = matching_rules(rules, spec);
             if matched.is_empty() {
                 debug!(
                     space_id = ?placed.space_id,

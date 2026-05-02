@@ -49,16 +49,16 @@ impl<'a> Validator<FeatureValidationInput<'a>> for FeatureValidator {
 fn check_solid_tiles(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
     for f in &plan.features {
         for &cell in &f.cells {
-            if let Some(tile) = tiles.get(cell.x, cell.y) {
-                if tile.is_solid() {
-                    issues.push(ValidationIssue {
-                        severity: Severity::Error,
-                        message: format!(
-                            "feature {:?} at ({}, {}) in space {:?} is on a solid tile ({:?})",
-                            f.kind, cell.x, cell.y, f.space_id, tile
-                        ),
-                    });
-                }
+            if let Some(tile) = tiles.get(cell.x, cell.y)
+                && tile.is_solid()
+            {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "feature {:?} at ({}, {}) in space {:?} is on a solid tile ({:?})",
+                        f.kind, cell.x, cell.y, f.space_id, tile
+                    ),
+                });
             }
         }
     }
@@ -68,16 +68,16 @@ fn check_solid_tiles(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Valid
 fn check_door_blocking(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
     for f in &plan.features {
         for &cell in &f.cells {
-            if let Some(tile) = tiles.get(cell.x, cell.y) {
-                if matches!(tile, Tile::Door | Tile::LockedDoor) {
-                    issues.push(ValidationIssue {
-                        severity: Severity::Error,
-                        message: format!(
-                            "feature {:?} at ({}, {}) in space {:?} is blocking a door",
-                            f.kind, cell.x, cell.y, f.space_id
-                        ),
-                    });
-                }
+            if let Some(tile) = tiles.get(cell.x, cell.y)
+                && matches!(tile, Tile::Door | Tile::LockedDoor)
+            {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    message: format!(
+                        "feature {:?} at ({}, {}) in space {:?} is blocking a door",
+                        f.kind, cell.x, cell.y, f.space_id
+                    ),
+                });
             }
         }
     }
@@ -203,10 +203,11 @@ fn check_connectivity(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Vali
     for y in 0..tiles.height as i32 {
         for x in 0..tiles.width as i32 {
             let p = Point { x, y };
-            if let Some(tile) = tiles.get(x, y) {
-                if tile.is_walkable() && !feature_cells.contains(&p) {
-                    all_walkable.push(p);
-                }
+            if let Some(tile) = tiles.get(x, y)
+                && tile.is_walkable()
+                && !feature_cells.contains(&p)
+            {
+                all_walkable.push(p);
             }
         }
     }
@@ -248,11 +249,12 @@ fn flood_fill_excluding(
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
 
-    if let Some(tile) = tiles.get(start.x, start.y) {
-        if tile.is_walkable() && !blocked.contains(&start) {
-            visited.insert(start);
-            queue.push_back(start);
-        }
+    if let Some(tile) = tiles.get(start.x, start.y)
+        && tile.is_walkable()
+        && !blocked.contains(&start)
+    {
+        visited.insert(start);
+        queue.push_back(start);
     }
 
     while let Some(pos) = queue.pop_front() {
@@ -263,11 +265,11 @@ fn flood_fill_excluding(
             if blocked.contains(&neighbor) {
                 continue;
             }
-            if let Some(tile) = tiles.get(neighbor.x, neighbor.y) {
-                if tile.is_walkable() {
-                    visited.insert(neighbor);
-                    queue.push_back(neighbor);
-                }
+            if let Some(tile) = tiles.get(neighbor.x, neighbor.y)
+                && tile.is_walkable()
+            {
+                visited.insert(neighbor);
+                queue.push_back(neighbor);
             }
         }
     }
