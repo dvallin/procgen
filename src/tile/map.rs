@@ -1,29 +1,10 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tile {
-    Void,
-    Floor,
-    Wall,
-    Door,
-    LockedDoor,
-}
-
-impl Tile {
-    /// Can a creature walk on this tile?
-    pub fn is_walkable(self) -> bool {
-        matches!(self, Tile::Floor | Tile::Door | Tile::LockedDoor)
-    }
-
-    /// Is this tile "solid" — blocks movement and line of sight?
-    pub fn is_solid(self) -> bool {
-        matches!(self, Tile::Void | Tile::Wall)
-    }
-}
+use crate::tile::registry::{Tile, TileId};
 
 #[derive(Debug, Clone)]
 pub struct TileMap {
     pub width: u32,
     pub height: u32,
-    pub tiles: Vec<Tile>,
+    pub tiles: Vec<TileId>,
 }
 
 impl TileMap {
@@ -31,7 +12,7 @@ impl TileMap {
         Self {
             width,
             height,
-            tiles: vec![Tile::Void; (width * height) as usize],
+            tiles: vec![Tile::VOID; (width * height) as usize],
         }
     }
 
@@ -39,7 +20,7 @@ impl TileMap {
         x >= 0 && y >= 0 && x < self.width as i32 && y < self.height as i32
     }
 
-    pub fn get(&self, x: i32, y: i32) -> Option<Tile> {
+    pub fn get(&self, x: i32, y: i32) -> Option<TileId> {
         if !self.in_bounds(x, y) {
             return None;
         }
@@ -47,7 +28,7 @@ impl TileMap {
         Some(self.tiles[idx])
     }
 
-    pub fn set(&mut self, x: i32, y: i32, tile: Tile) {
+    pub fn set(&mut self, x: i32, y: i32, tile: TileId) {
         if !self.in_bounds(x, y) {
             return;
         }
@@ -60,7 +41,7 @@ impl TileMap {
     pub fn flood_fill(
         &self,
         start: crate::geometry::geom::Point,
-        passable: impl Fn(Tile) -> bool,
+        passable: impl Fn(TileId) -> bool,
     ) -> std::collections::HashSet<crate::geometry::geom::Point> {
         use std::collections::{HashSet, VecDeque};
 

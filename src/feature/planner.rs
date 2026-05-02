@@ -234,7 +234,7 @@ mod tests {
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
-    use crate::tile::map::Tile;
+    use crate::tile::registry::Tile;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -249,21 +249,21 @@ mod tests {
         };
         // Walls.
         for x in rect.x..rect.x + rect.w {
-            map.set(x, rect.y, Tile::Wall);
-            map.set(x, rect.y + rect.h - 1, Tile::Wall);
+            map.set(x, rect.y, Tile::WALL);
+            map.set(x, rect.y + rect.h - 1, Tile::WALL);
         }
         for y in rect.y..rect.y + rect.h {
-            map.set(rect.x, y, Tile::Wall);
-            map.set(rect.x + rect.w - 1, y, Tile::Wall);
+            map.set(rect.x, y, Tile::WALL);
+            map.set(rect.x + rect.w - 1, y, Tile::WALL);
         }
         // Floor interior.
         for y in (rect.y + 1)..(rect.y + rect.h - 1) {
             for x in (rect.x + 1)..(rect.x + rect.w - 1) {
-                map.set(x, y, Tile::Floor);
+                map.set(x, y, Tile::FLOOR);
             }
         }
         // Door on east wall.
-        map.set(5, 3, Tile::Door);
+        map.set(5, 3, Tile::DOOR);
         map
     }
 
@@ -418,14 +418,14 @@ mod tests {
         // Build a 3×3 map where the interior is only 1 floor tile.
         let mut map = TileMap::new(3, 3);
         for x in 0..3 {
-            map.set(x, 0, Tile::Wall);
-            map.set(x, 2, Tile::Wall);
+            map.set(x, 0, Tile::WALL);
+            map.set(x, 2, Tile::WALL);
         }
         for y in 0..3 {
-            map.set(0, y, Tile::Wall);
-            map.set(2, y, Tile::Wall);
+            map.set(0, y, Tile::WALL);
+            map.set(2, y, Tile::WALL);
         }
-        map.set(1, 1, Tile::Floor);
+        map.set(1, 1, Tile::FLOOR);
 
         let spatial = SpatialPlan {
             spaces: vec![

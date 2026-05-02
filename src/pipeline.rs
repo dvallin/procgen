@@ -29,6 +29,8 @@ use crate::spatial::plan::SpatialPlan;
 use crate::spatial::planner::{SimpleSpatialPlanner, SpatialPlanError, SpatialPlanner};
 use crate::tile::map::TileMap;
 use crate::tile::rasterize::{RasterizeError, Rasterizer, SimpleRasterizer};
+use crate::tile::registry::TileRegistry;
+use crate::tile::scatter::{TileScatterRule, apply_scatter};
 use crate::validate::entity::{EntityValidationInput, EntityValidator};
 use crate::validate::feature::{FeatureValidationInput, FeatureValidator};
 use crate::validate::geometry::GeometryValidator;
@@ -63,6 +65,10 @@ pub struct PipelineConfig {
     pub feature_rules: Option<Vec<FeatureRule>>,
     /// Optional entity rules override. If `None`, loads from the default asset path.
     pub entity_rules: Option<Vec<EntityRule>>,
+    /// Optional tile registry override. If `None`, uses the default built-in registry.
+    pub tile_registry: Option<TileRegistry>,
+    /// Optional tile scatter rules override. If `None`, loads from the default asset path.
+    pub scatter_rules: Option<Vec<TileScatterRule>>,
 }
 
 impl Default for PipelineConfig {
@@ -73,6 +79,8 @@ impl Default for PipelineConfig {
             seed: None,
             feature_rules: None,
             entity_rules: None,
+            tile_registry: None,
+            scatter_rules: None,
         }
     }
 }
@@ -276,8 +284,30 @@ impl Pipeline {
 
         // ── 4. Rasterisation ───────────────────────────────────────
         info!("rasterising tiles");
-        let tiles = SimpleRasterizer.rasterize(&geometry)?;
+        let registry = match &self.config.tile_registry {
+            Some(reg) => reg.clone(),
+            None => TileRegistry::default_registry(),
+        };
+        let mut tiles = SimpleRasterizer.rasterize(&geometry, &registry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
+
+        // ── 4b. Tile scatter ───────────────────────────────────────────
+        let scatter_rules = match &self.config.scatter_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_tile_scatter_rules()
+                .expect("embedded tile scatter rules are valid JSON"),
+        };
+        if !scatter_rules.is_empty() {
+            info!(rules = scatter_rules.len(), "applying tile scatter");
+            apply_scatter(
+                &mut tiles,
+                &geometry,
+                &spatial,
+                &scatter_rules,
+                &registry,
+                &mut rng,
+            );
+        }
 
         // ── Resolve rule sets ──────────────────────────────────────────
         let feature_rules = match &self.config.feature_rules {
@@ -506,6 +536,8 @@ mod tests {
                 seed: None,
                 feature_rules: None,
                 entity_rules: None,
+                tile_registry: None,
+                scatter_rules: None,
             },
         };
         let base = PlacementConfig::default();
@@ -523,6 +555,8 @@ mod tests {
                 seed: None,
                 feature_rules: None,
                 entity_rules: None,
+                tile_registry: None,
+                scatter_rules: None,
             },
         };
         let base = PlacementConfig {

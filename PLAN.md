@@ -8,10 +8,10 @@ A story-driven procedural generator where narrative signals steer every decision
 
 ## Where We Are
 
-The pipeline skeleton is complete and validated. Two demo scenarios flow through all layers and produce ASCII output. 289 tests (property-based + integration + regression) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phase 1 (Data-Driven Rules & Asset Loading) is complete. Phase 2 (Narrative Patterns & Intent Generation) is complete.**
+The pipeline skeleton is complete and validated. Three demo scenarios (crypt, tavern, cave) flow through all layers and produce ASCII output. 309 tests (property-based + integration + regression + doctests) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phases 1–3 are complete.**
 
 ```
-SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap (+scatter) → FeaturePlan → EntityPlan → ASCII
 ```
 
 **What works:**
@@ -30,8 +30,14 @@ SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPla
 - 2 theme vocabularies with role-indexed entries (labels, tags, archetypes, location_kind, motifs)
 - `Pipeline::run()` uses `GenericIntentBuilder` internally; no hard-coded builders remain
 
-**What’s next (Phase 3):**
-- Tile Registry & Data-Driven Rasterization
+- Tile registry: `TileId(u16)` + `TileRegistry` with JSON-defined tile types (walkable, opaque, ascii_char, tags)
+- Extended palette: Water, Pit, Stairs, Rubble, Grass — all as real tiles in the `TileMap`
+- Tile scatter rules: data-driven floor→terrain replacement during rasterization (connectivity-safe for non-walkable tiles)
+- Registry-aware ASCII renderer (`render_ascii_full`)
+- Proper tiles/features separation: tiles ARE the ground; features are objects ON tiles
+
+**What's next (Phase 4):**
+- Narrative Room Character & Atmosphere
 
 ---
 
@@ -107,44 +113,48 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 ---
 
-### Phase 3: Tile Registry & Data-Driven Rasterization
+### Phase 3: Tile Registry & Data-Driven Rasterization ✅
 
 **Goal:** Break the hard-coded `Tile` enum into a registry-based system so game-specific terrain can be defined in data.
 
-| # | Task | Description |
-|---|---|---|
-| 3.1 | **TileId newtype** | `TileId(u16)` — a lightweight handle into the tile registry. `TileMap` stores `Vec<TileId>` instead of `Vec<Tile>`. |
-| 3.2 | **TileRegistry** | Maps `TileId` → `TileProperties { name, walkable, opaque, ascii_char, tags }`. Loaded from JSON. Built-in defaults cover the current enum variants. |
-| 3.3 | **Migrate Tile enum → TileId** | `Tile::Floor` becomes `TileId(1)` etc. All code that pattern-matches on `Tile` now queries registry properties (`registry.is_walkable(id)`). |
-| 3.4 | **Rasterizer uses registry** | `SimpleRasterizer` receives `&TileRegistry` (via pipeline config or trait method). Places `TileId`s instead of enum variants. |
-| 3.5 | **Extended tile palette** | Add tiles for Water, Pit, Stairs, Rubble, Grass — each with properties. Demonstrate in a new "cave" scenario context. |
-| 3.6 | **ASCII renderer uses registry** | `render_ascii` queries `TileRegistry` for the display character instead of matching an enum. |
-| 3.7 | **Backward compat** | Keep a convenience `Tile` enum as a named constant set (like `Tile::FLOOR -> TileId(1)`) so existing tests don't break catastrophically. |
+| # | Task | Status | Description |
+|---|---|---|---|
+| 3.1 | **TileId newtype** | ✅ | `TileId(u16)` — a lightweight handle into the tile registry. `TileMap` stores `Vec<TileId>` instead of `Vec<Tile>`. |
+| 3.2 | **TileRegistry** | ✅ | Maps `TileId` → `TileProperties { name, walkable, opaque, ascii_char, tags }`. Loaded from JSON. Built-in defaults cover the current enum variants. |
+| 3.3 | **Migrate Tile enum → TileId** | ✅ | `Tile::Floor` becomes `TileId(1)` etc. All code that pattern-matches on `Tile` now queries registry properties (`registry.is_walkable(id)`). |
+| 3.4 | **Rasterizer uses registry** | ✅ | `SimpleRasterizer` receives `&TileRegistry` (via pipeline config or trait method). Uses `registry.is_walkable()` in wall inference. |
+| 3.5 | **Extended tile palette** | ✅ | Added tiles for Water, Pit, Stairs, Rubble, Grass — each with properties. Cave scenario demonstrates terrain variety through the feature-layer overlay (Decoration subtypes). |
+| 3.6 | **ASCII renderer uses registry** | ✅ | `render_ascii_full` and `render_ascii_with_registry` query `TileRegistry` for the display character. Backward-compat functions retain hardcoded fallback. |
+| 3.7 | **Backward compat** | ✅ | `Tile` namespace struct with named constants (`Tile::FLOOR -> TileId(1)`) so existing tests need only mechanical renames. |
+| 3.8 | **Tile scatter rules (JSON)** | ✅ | Data-driven rasterization-time tile scatter. `assets/rules/tile_scatter.json` maps room tags → tile replacements with density. The scatter step runs after rasterization and replaces `Floor` tiles with terrain variants (`Grass`, `Rubble`, `Water`) — producing actual `TileId`s in the `TileMap`. Non-walkable scatter is connectivity-safe (only places where all cardinal neighbors remain walkable). |
 
 **Design decisions:**
 - `NodeRole` and `EdgeRole` do NOT get this treatment — they determine which *code path* runs (corridor routing, entry room entity skip, etc.). They stay as enums.
 - `TileId` is tiny (u16) and Copy — no performance regression vs. the enum.
 - The registry is a game-level concern: different games using this generator can define different tile sets.
 - Feature/entity placement strategies query `registry.is_walkable(tile)` instead of matching enum variants.
+- **Tiles vs. Features:** Tiles are the ground itself (a cave room’s floor IS grass). Features are objects ON tiles (chests, altars). Terrain that affects movement/pathfinding should be a tile; cosmetic decorations that don’t block should be features. The tile scatter rules (3.8) handle the former; the feature rules handle the latter.
+- **Tile scatter rules** follow the same pattern as feature/entity rules: JSON array of `{ match_tag, tile_name, density, avoid_doors }`. The rasterizer loads them via the asset system with embedded fallback. Walkable terrain tiles (Grass, Rubble) are safe to scatter freely; non-walkable terrain (Water, Pit) requires connectivity preservation (only scatter on tiles with ≥3 walkable cardinal neighbors).
 
-**Exit criterion:** Current demos produce identical ASCII output. A new tile type can be added with zero Rust code changes — just a JSON entry.
+**Exit criterion:** `cargo run -- cave` renders a map where the `TileMap` itself contains `Grass` and `Rubble` tile IDs (visible in ASCII output via registry lookup), AND feature decorations overlay on top. A new tile type can be added with zero Rust code changes — just JSON entries in `tiles.json` + `tile_scatter.json`.
 
 ---
 
 ### Phase 4: Narrative Room Character & Atmosphere
 
-**Goal:** Rooms feel different based on narrative context, not just structural role.
+**Goal:** Rooms feel different based on narrative context, not just structural role. Features become data-driven like tiles.
 
 | # | Task | Description |
 |---|---|---|
-| 4.1 | **Atmosphere tags on SpaceSpec** | Add `atmosphere: Vec<Tag>` to `SpaceSpec`. Populated by the slot filler from theme vocabulary (e.g. theme "damp_cellar" → atmosphere: [musty, dripping]). |
-| 4.2 | **Feature rules conditioned on atmosphere** | `FeatureRule` gains `match_atmosphere: Option<Tag>`. "damp" rooms get puddle decorations, "arcane" rooms get glowing runes. |
-| 4.3 | **Entity rules conditioned on atmosphere/motif** | `EntityRule` gains `match_motif: Option<MotifId>`. Motif "timber" → rats more likely; motif "gothic" → undead more likely. |
-| 4.4 | **Room size by narrative importance** | Rooms tagged `main_goal` or `climax` get larger `SizeHint`. Optional/branch rooms get smaller. Spatial planner reads these tags. |
-| 4.5 | **Room templates (prefab interiors)** | For specific `(archetype, theme)` combos, provide a pre-designed feature layout as a JSON template. E.g. "library" archetype + "arcane" theme → shelves along walls, desk at center. Template interiors override rule-based placement for that room. |
-| 4.6 | **New Scenario: Wizard's Tower** | 3–4 vertical levels connected by shafts. Tests `VerticalTraversal`, `Shaft` archetype, arcane theme vocabulary. Proves the system handles non-dungeon structures. |
+| 4.1 | **Feature Registry & FeatureCategory enum** | Mirror the tile registry pattern for features. Replace `FeatureKind` enum variants with a `feature_type: String` identifier + `FeatureRegistry` mapping type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for gameplay behavior dispatch. Feature rules reference type strings (“altar”, “chest”) instead of enum variants. New feature types added via JSON without code changes. |
+| 4.2 | **Atmosphere tags on SpaceSpec** | Add `atmosphere: Vec<Tag>` to `SpaceSpec`. Populated by the slot filler from theme vocabulary (e.g. theme "damp_cellar" → atmosphere: [musty, dripping]). |
+| 4.3 | **Feature rules conditioned on atmosphere** | `FeatureRule` gains `match_atmosphere: Option<Tag>`. "damp" rooms get puddle decorations, "arcane" rooms get glowing runes. |
+| 4.4 | **Entity rules conditioned on atmosphere/motif** | `EntityRule` gains `match_motif: Option<MotifId>`. Motif "timber" → rats more likely; motif "gothic" → undead more likely. |
+| 4.5 | **Room size by narrative importance** | Rooms tagged `main_goal` or `climax` get larger `SizeHint`. Optional/branch rooms get smaller. Spatial planner reads these tags. |
+| 4.6 | **Room templates (prefab interiors)** | For specific `(archetype, theme)` combos, provide a pre-designed feature layout as a JSON template. E.g. "library" archetype + "arcane" theme → shelves along walls, desk at center. Template interiors override rule-based placement for that room. |
+| 4.7 | **New Scenario: Wizard's Tower** | 3–4 vertical levels connected by shafts. Tests `VerticalTraversal`, `Shaft` archetype, arcane theme vocabulary. Proves the system handles non-dungeon structures. |
 
-**Exit criterion:** Three scenarios (crypt, tavern, tower) with visibly different room character. Room templates work for at least one archetype.
+**Exit criterion:** Four scenarios (crypt, tavern, cave, tower) with visibly different room character. Feature types are fully data-driven. Room templates work for at least one archetype.
 
 ---
 
@@ -238,9 +248,13 @@ enum Severity    { Error, Warning, Info }
 ### Key Types (content — becoming data-driven)
 
 ```rust
-// Currently enums, migrating to data:
-enum FeatureKind { Furniture, Container, Trap, Decoration, Interactable }  // → JSON rules
-enum Tile        { Void, Floor, Wall, Door, LockedDoor }                   // → TileRegistry (Phase 3)
+// Phase 3 (done): Tile enum collapsed to TileId + TileRegistry
+// TileId(u16) + TileRegistry { name, walkable, opaque, ascii_char, tags }
+
+// Phase 4 (planned): FeatureKind enum → feature_type: String + FeatureRegistry
+// FeatureCategory enum stays for behavior dispatch:
+enum FeatureCategory { Furniture, Container, Trap, Decoration, Interactable }
+// FeatureRegistry maps type name → { category, ascii_char, blocking, tags }
 
 // Already data-driven (string newtypes):
 struct Tag(String)

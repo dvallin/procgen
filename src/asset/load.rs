@@ -13,6 +13,8 @@ use crate::entity::rules::EntityRule;
 use crate::feature::rules::FeatureRule;
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::vocabulary::ThemeVocabulary;
+use crate::tile::registry::{TileProperties, TileRegistry};
+use crate::tile::scatter::TileScatterRule;
 
 // ─── Embedded defaults (compiled into the binary) ───────────────────────────
 
@@ -27,6 +29,12 @@ const EMBEDDED_NARRATIVE_PATTERNS: &str = include_str!("../../assets/patterns/na
 
 /// Default theme vocabularies, embedded at compile time.
 const EMBEDDED_THEME_VOCABULARIES: &str = include_str!("../../assets/vocabularies/themes.json");
+
+/// Default tile registry, embedded at compile time.
+const EMBEDDED_TILE_REGISTRY: &str = include_str!("../../assets/rules/tiles.json");
+
+/// Default tile scatter rules, embedded at compile time.
+const EMBEDDED_TILE_SCATTER_RULES: &str = include_str!("../../assets/rules/tile_scatter.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -182,6 +190,42 @@ pub fn load_default_vocabularies() -> Result<Vec<ThemeVocabulary>, AssetLoadErro
     load_rules_with_fallback(DEFAULT_VOCABULARIES_PATH, EMBEDDED_THEME_VOCABULARIES)
 }
 
+/// Default file path for the tile registry, relative to the working directory.
+pub const DEFAULT_TILE_REGISTRY_PATH: &str = "assets/rules/tiles.json";
+
+/// Load the default tile registry.
+///
+/// Tries `assets/rules/tiles.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist. Builds a [`TileRegistry`]
+/// from the loaded tile properties.
+pub fn load_default_tile_registry() -> Result<TileRegistry, AssetLoadError> {
+    let props: Vec<TileProperties> =
+        load_rules_with_fallback(DEFAULT_TILE_REGISTRY_PATH, EMBEDDED_TILE_REGISTRY)?;
+    let mut registry = TileRegistry::from_properties(props);
+    // Ensure we have at least the builtin count (pad with defaults if JSON is short)
+    let builtin = TileRegistry::default_registry();
+    while registry.len() < builtin.len() {
+        let id_val = registry.len() as u16;
+        if let Some(p) = builtin.get(crate::tile::registry::TileId(id_val)) {
+            registry.register(p.clone());
+        } else {
+            break;
+        }
+    }
+    Ok(registry)
+}
+
+/// Default file path for tile scatter rules, relative to the working directory.
+pub const DEFAULT_TILE_SCATTER_RULES_PATH: &str = "assets/rules/tile_scatter.json";
+
+/// Load the default tile scatter rules.
+///
+/// Tries `assets/rules/tile_scatter.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_tile_scatter_rules() -> Result<Vec<TileScatterRule>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_TILE_SCATTER_RULES_PATH, EMBEDDED_TILE_SCATTER_RULES)
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -196,7 +240,7 @@ mod tests {
     #[test]
     fn load_embedded_feature_rules_succeeds() {
         let rules = load_default_feature_rules().unwrap();
-        assert_eq!(rules.len(), 10);
+        assert_eq!(rules.len(), 13);
 
         // Spot-check a known rule.
         let sarcophagus = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
@@ -265,8 +309,7 @@ mod tests {
         // load_rules_with_fallback should use it rather than the fallback.
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("assets/rules/features.json", "[]").unwrap();
-        // If it used the fallback "[]", we'd get 0 rules.
-        assert_eq!(rules.len(), 10);
+        assert_eq!(rules.len(), 13);
     }
 
     #[test]
@@ -274,7 +317,7 @@ mod tests {
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("nonexistent/path/features.json", EMBEDDED_FEATURE_RULES)
                 .unwrap();
-        assert_eq!(rules.len(), 10);
+        assert_eq!(rules.len(), 13);
     }
 
     #[test]
@@ -388,11 +431,12 @@ mod tests {
     #[test]
     fn load_embedded_vocabularies_succeeds() {
         let vocabs = load_default_vocabularies().unwrap();
-        assert_eq!(vocabs.len(), 2);
+        assert_eq!(vocabs.len(), 3);
 
         let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"undead_nobility"));
         assert!(ids.contains(&"urban_underground"));
+        assert!(ids.contains(&"natural_cave"));
     }
 
     #[test]
@@ -452,6 +496,51 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn load_embedded_tile_registry_succeeds() {
+        let registry = load_default_tile_registry().unwrap();
+        assert_eq!(registry.len(), 10);
+    }
+
+    #[test]
+    fn tile_registry_from_json_matches_defaults() {
+        use crate::tile::registry::Tile;
+        let registry = load_default_tile_registry().unwrap();
+        let default = TileRegistry::default_registry();
+
+        // Same number of tiles
+        assert_eq!(registry.len(), default.len());
+
+        // Same properties for each built-in tile
+        for id_val in 0..Tile::BUILTIN_COUNT {
+            let id = crate::tile::registry::TileId(id_val);
+            assert_eq!(
+                registry.name(id),
+                default.name(id),
+                "name mismatch for {}",
+                id
+            );
+            assert_eq!(
+                registry.is_walkable(id),
+                default.is_walkable(id),
+                "walkable mismatch for {}",
+                id
+            );
+            assert_eq!(
+                registry.is_opaque(id),
+                default.is_opaque(id),
+                "opaque mismatch for {}",
+                id
+            );
+            assert_eq!(
+                registry.ascii_char(id),
+                default.ascii_char(id),
+                "ascii_char mismatch for {}",
+                id
+            );
         }
     }
 }

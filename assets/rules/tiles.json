@@ -1,0 +1,72 @@
+[
+  {
+    "name": "void",
+    "walkable": false,
+    "opaque": true,
+    "ascii_char": " ",
+    "tags": []
+  },
+  {
+    "name": "floor",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": ".",
+    "tags": []
+  },
+  {
+    "name": "wall",
+    "walkable": false,
+    "opaque": true,
+    "ascii_char": "#",
+    "tags": []
+  },
+  {
+    "name": "door",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": "+",
+    "tags": []
+  },
+  {
+    "name": "locked_door",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": "*",
+    "tags": []
+  },
+  {
+    "name": "water",
+    "walkable": false,
+    "opaque": false,
+    "ascii_char": "~",
+    "tags": ["liquid", "hazard"]
+  },
+  {
+    "name": "pit",
+    "walkable": false,
+    "opaque": false,
+    "ascii_char": "v",
+    "tags": ["hazard"]
+  },
+  {
+    "name": "stairs",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": ">",
+    "tags": ["transition"]
+  },
+  {
+    "name": "rubble",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": ":",
+    "tags": ["rough"]
+  },
+  {
+    "name": "grass",
+    "walkable": true,
+    "opaque": false,
+    "ascii_char": ",",
+    "tags": ["natural"]
+  }
+]

@@ -16,7 +16,8 @@ use crate::feature::plan::{FeatureKind, FeaturePlan};
 use crate::geometry::geom::{GeometryPlan, Point, Rect};
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
-use crate::tile::map::{Tile, TileMap};
+use crate::tile::map::TileMap;
+use crate::tile::registry::Tile;
 
 /// Trait for producing an [`EntityPlan`] from upstream layers.
 pub trait EntityPlanner {
@@ -176,7 +177,7 @@ impl EntityPlanner for SimpleEntityPlanner {
 fn compute_density_cap(tiles: &TileMap, rect: Rect) -> u32 {
     let walkable = rect
         .iter_points()
-        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::FLOOR))
         .count() as u32;
     (walkable / 4).max(1)
 }
@@ -315,7 +316,7 @@ fn find_center_floor(tiles: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> 
 
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::FLOOR))
         .min_by_key(|p| {
             let dx = p.x - center.x;
             let dy = p.y - center.y;
@@ -327,7 +328,7 @@ fn find_center_floor(tiles: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> 
 fn find_walkable_floor(tiles: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> Vec<Point> {
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::FLOOR))
         .collect()
 }
 
@@ -335,13 +336,11 @@ fn find_walkable_floor(tiles: &TileMap, rect: Rect, occupied: &HashSet<Point>) -
 fn find_near_entrance(tiles: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> Vec<Point> {
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| tiles.get(p.x, p.y) == Some(Tile::FLOOR))
         .filter(|p| {
             p.cardinals().iter().any(|n| {
-                matches!(
-                    tiles.get(n.x, n.y),
-                    Some(Tile::Door) | Some(Tile::LockedDoor)
-                )
+                let t = tiles.get(n.x, n.y);
+                t == Some(Tile::DOOR) || t == Some(Tile::LOCKED_DOOR)
             })
         })
         .collect()
@@ -439,19 +438,19 @@ mod tests {
             h: 5,
         };
         for x in rect.x..rect.x + rect.w {
-            map.set(x, rect.y, Tile::Wall);
-            map.set(x, rect.y + rect.h - 1, Tile::Wall);
+            map.set(x, rect.y, Tile::WALL);
+            map.set(x, rect.y + rect.h - 1, Tile::WALL);
         }
         for y in rect.y..rect.y + rect.h {
-            map.set(rect.x, y, Tile::Wall);
-            map.set(rect.x + rect.w - 1, y, Tile::Wall);
+            map.set(rect.x, y, Tile::WALL);
+            map.set(rect.x + rect.w - 1, y, Tile::WALL);
         }
         for y in (rect.y + 1)..(rect.y + rect.h - 1) {
             for x in (rect.x + 1)..(rect.x + rect.w - 1) {
-                map.set(x, y, Tile::Floor);
+                map.set(x, y, Tile::FLOOR);
             }
         }
-        map.set(5, 3, Tile::Door);
+        map.set(5, 3, Tile::DOOR);
         map
     }
 
@@ -701,14 +700,14 @@ mod tests {
         // Build a 3×3 map with only 1 floor tile.
         let mut map = TileMap::new(3, 3);
         for x in 0..3 {
-            map.set(x, 0, Tile::Wall);
-            map.set(x, 2, Tile::Wall);
+            map.set(x, 0, Tile::WALL);
+            map.set(x, 2, Tile::WALL);
         }
         for y in 0..3 {
-            map.set(0, y, Tile::Wall);
-            map.set(2, y, Tile::Wall);
+            map.set(0, y, Tile::WALL);
+            map.set(2, y, Tile::WALL);
         }
-        map.set(1, 1, Tile::Floor);
+        map.set(1, 1, Tile::FLOOR);
 
         let spatial = SpatialPlan {
             spaces: vec![make_spec(

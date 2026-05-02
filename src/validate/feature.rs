@@ -14,7 +14,8 @@ use crate::feature::plan::FeaturePlan;
 use crate::feature::rules::{default_rules, matching_rules};
 use crate::geometry::geom::{GeometryPlan, Point};
 use crate::spatial::plan::{SpaceId, SpatialPlan};
-use crate::tile::map::{Tile, TileMap};
+use crate::tile::map::TileMap;
+use crate::tile::registry::Tile;
 use crate::validate::{Severity, ValidationIssue, ValidationResult, Validator};
 
 /// Input bundle for feature validation — references all the layers the
@@ -69,7 +70,7 @@ fn check_door_blocking(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Val
     for f in &plan.features {
         for &cell in &f.cells {
             if let Some(tile) = tiles.get(cell.x, cell.y)
-                && matches!(tile, Tile::Door | Tile::LockedDoor)
+                && (tile == Tile::DOOR || tile == Tile::LOCKED_DOOR)
             {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
@@ -184,13 +185,18 @@ fn check_required_features(
 /// Error: the map must remain fully connected when feature cells are
 /// treated as impassable. A feature that cuts a corridor in half would
 /// make parts of the dungeon unreachable.
+///
+/// Note: `Decoration` features are purely cosmetic overlays and do not
+/// block passage, so they are excluded from this check.
 fn check_connectivity(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
+    use crate::feature::plan::FeatureKind;
     use std::collections::HashSet;
 
-    // Collect all feature cells into a set.
+    // Collect cells from non-decoration features only (decorations don't block).
     let feature_cells: HashSet<Point> = plan
         .features
         .iter()
+        .filter(|f| !matches!(f.kind, FeatureKind::Decoration(_)))
         .flat_map(|f| f.cells.iter().copied())
         .collect();
 
@@ -284,21 +290,21 @@ mod tests {
     use crate::geometry::geom::{Footprint, PlacedSpace, Rect};
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
-    use crate::tile::map::Tile;
+    use crate::tile::registry::Tile;
 
     fn make_5x5_map() -> TileMap {
         let mut map = TileMap::new(5, 5);
         for y in 0..5i32 {
             for x in 0..5i32 {
                 let tile = if x == 0 || x == 4 || y == 0 || y == 4 {
-                    Tile::Wall
+                    Tile::WALL
                 } else {
-                    Tile::Floor
+                    Tile::FLOOR
                 };
                 map.set(x, y, tile);
             }
         }
-        map.set(2, 0, Tile::Door);
+        map.set(2, 0, Tile::DOOR);
         map
     }
 
@@ -543,9 +549,9 @@ mod tests {
         for y in 0..5i32 {
             for x in 0..5i32 {
                 let tile = if x == 0 || x == 4 || y == 0 || y == 4 {
-                    Tile::Wall
+                    Tile::WALL
                 } else {
-                    Tile::Floor
+                    Tile::FLOOR
                 };
                 map.set(x, y, tile);
             }
@@ -554,20 +560,20 @@ mod tests {
         for y in 0..5i32 {
             for x in 6..11i32 {
                 let tile = if x == 6 || x == 10 || y == 0 || y == 4 {
-                    Tile::Wall
+                    Tile::WALL
                 } else {
-                    Tile::Floor
+                    Tile::FLOOR
                 };
                 map.set(x, y, tile);
             }
         }
         // Corridor: single floor tile connecting the two rooms.
-        map.set(4, 2, Tile::Door);
-        map.set(5, 2, Tile::Floor);
-        map.set(6, 2, Tile::Door);
+        map.set(4, 2, Tile::DOOR);
+        map.set(5, 2, Tile::FLOOR);
+        map.set(6, 2, Tile::DOOR);
         // Walls above and below corridor.
-        map.set(5, 1, Tile::Wall);
-        map.set(5, 3, Tile::Wall);
+        map.set(5, 1, Tile::WALL);
+        map.set(5, 3, Tile::WALL);
 
         let geometry = GeometryPlan {
             spaces: vec![PlacedSpace {

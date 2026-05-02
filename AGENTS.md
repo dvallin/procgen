@@ -6,18 +6,19 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with full pipeline, property-based tests, and integration tests. Two demo scenarios (crypt, tavern) produce ASCII output. All intent generation is data-driven — no hard-coded builders remain.
+Working vertical slice with full pipeline, property-based tests, and integration tests. Three demo scenarios (crypt, tavern, cave) produce ASCII output. All intent generation is data-driven — no hard-coded builders remain.
 
 **Completed phases (original build-out):** Module restructure, Tag newtype, MapIntent + SituationContext, SpatialPlan + generic geometry, real geometry placement (footprints, routing, corridor merging, constraint-aware layout), FeaturePlan, EntityPlan, Pipeline Runner + Validation Loop (retry, relaxation, seeded RNG).
 
 **Completed phases (new roadmap):**
 - **Phase 1 — Data-Driven Rules & Asset Loading** (tasks 1.1–1.5): Feature/entity rules as JSON assets with embedded fallback, generic asset loader, PipelineConfig overrides.
 - **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
+- **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties (walkable, opaque, ascii_char, tags), `TileMap` stores `Vec<TileId>`, backward-compat `Tile` namespace struct with named constants (`Tile::FLOOR`, etc.), JSON asset for tile definitions. Rasterizer accepts `&TileRegistry`. Extended palette (Water, Pit, Stairs, Rubble, Grass). ASCII renderer uses registry for tile characters (`render_ascii_full`). **Tile scatter rules** (`assets/rules/tile_scatter.json`) replace floor tiles with terrain variants at data-driven densities during rasterization — proper separation: tiles ARE the ground (water, rubble, grass), features are objects ON tiles (moss, stalagmites, fungus). Non-walkable scatter is connectivity-safe.
 
 ## Pipeline (current)
 
 ```
-SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → FeaturePlan → EntityPlan → ASCII
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap (+scatter) → FeaturePlan → EntityPlan → ASCII
 ```
 
 Each stage is behind a trait (`IntentBuilder`, `SpatialPlanner`, `GeometryPlanner`, `Rasterizer`, `FeaturePlanner`, `EntityPlanner`) with a simple default implementation. The `Pipeline` struct orchestrates all stages with retry semantics and seeded RNG.
@@ -32,7 +33,8 @@ src/
 ├── pipeline.rs          # Pipeline runner, PipelineConfig, PipelineError, retry loop + seeded RNG
 ├── demo/                # Scenario situation factories
 │   ├── crypt.rs         # build_crypt_situation() → SituationContext
-│   └── tavern.rs        # build_tavern_situation() → SituationContext
+│   ├── tavern.rs        # build_tavern_situation() → SituationContext
+│   └── cave.rs          # build_cave_situation() → SituationContext
 ├── situation/           # World/narrative context
 │   └── mod.rs           # SituationContext struct + builder methods
 ├── intent/              # Map intent / structural graph
@@ -55,8 +57,10 @@ src/
 │   ├── planner.rs       # SpatialPlan → GeometryPlan (BFS layout + constraint-aware placement)
 │   └── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
 ├── tile/                # Tile-level rasterization
-│   ├── map.rs           # TileMap, Tile enum, flood_fill
+│   ├── registry.rs      # TileId newtype, Tile constants, TileProperties, TileRegistry
+│   ├── map.rs           # TileMap (stores Vec<TileId>), flood_fill
 │   ├── rasterize.rs     # GeometryPlan → TileMap (trait + impl + proptest)
+│   ├── scatter.rs       # TileScatterRule, apply_scatter (tag→tile replacement with density)
 │   └── ascii.rs         # TileMap → String debug rendering (+ feature + entity overlay)
 ├── feature/             # Feature placement
 │   ├── plan.rs          # FeaturePlan, FeaturePlacement, FeatureKind, FeaturePlanError
@@ -82,7 +86,9 @@ assets/
 │   └── themes.json      # Theme vocabularies (undead_nobility, urban_underground)
 └── rules/
     ├── features.json    # Default feature rules (serde JSON, embedded fallback)
-    └── entities.json    # Default entity rules (serde JSON, embedded fallback)
+    ├── entities.json    # Default entity rules (serde JSON, embedded fallback)
+    ├── tiles.json       # Default tile registry (serde JSON, embedded fallback)
+    └── tile_scatter.json # Tile scatter rules (tag→tile density, embedded fallback)
 
 tests/
 ├── integration.rs       # End-to-end pipeline tests (connectivity, overlaps, etc.)
@@ -96,8 +102,9 @@ These live on the types they belong to — no separate utility module:
 - **`Point::cardinals()`** — returns `[Point; 4]` (N, S, W, E neighbors)
 - **`Point::neighbors()`** — returns `[Point; 8]` (cardinal + diagonal)
 - **`Rect::overlaps(&self, other: &Rect)`** — exclusive overlap test
-- **`Tile::is_walkable()`** — true for Floor, Door, LockedDoor
-- **`Tile::is_solid()`** — true for Void, Wall
+- **`TileId::is_walkable()`** — true for Floor, Door, LockedDoor (built-in tiles)
+- **`TileId::is_solid()`** — true for Void, Wall (built-in tiles)
+- **`TileRegistry::is_walkable(id)`** — registry-based check (works for custom tiles too)
 - **`TileMap::flood_fill(start, passable)`** — BFS returning `HashSet<Point>`
 
 ## Architecture Principles
@@ -121,6 +128,7 @@ These live on the types they belong to — no separate utility module:
 ```sh
 cargo run                          # Prints ASCII map (default: crypt)
 cargo run -- tavern                # Prints tavern cellar map
+cargo run -- cave                  # Prints natural cave map
 cargo run -- --seed 42             # Deterministic generation with seed
 cargo run -- crypt --seed 42       # Explicit scenario + seed
 cargo run -- --trace               # INFO-level pipeline trace (to stderr)
@@ -128,7 +136,7 @@ cargo run -- --trace debug         # DEBUG-level (placement details, routing dec
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (289 currently: 210 unit/proptest + 23 regression + 54 integration + 3 doctests)
+cargo test       # Runs all tests (309 currently: 228 unit/proptest + 23 regression + 54 integration + 4 doctests)
 ```
 
 ## Target Architecture

@@ -17,7 +17,8 @@ use crate::entity::rules::{default_entity_rules, matching_entity_rules};
 use crate::feature::plan::FeaturePlan;
 use crate::geometry::geom::{GeometryPlan, Point};
 use crate::spatial::plan::{SpaceId, SpatialPlan};
-use crate::tile::map::{Tile, TileMap};
+use crate::tile::map::TileMap;
+use crate::tile::registry::Tile;
 use crate::validate::{Severity, ValidationIssue, ValidationResult, Validator};
 
 /// Input bundle for entity validation — references all the layers the
@@ -223,7 +224,7 @@ fn check_door_tile(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec<Validati
     for entity in &plan.entities {
         let pos = entity.position;
         if let Some(tile) = tiles.get(pos.x, pos.y)
-            && matches!(tile, Tile::Door | Tile::LockedDoor)
+            && (tile == Tile::DOOR || tile == Tile::LOCKED_DOOR)
         {
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
@@ -255,19 +256,19 @@ mod tests {
             h: 5,
         };
         for x in rect.x..rect.x + rect.w {
-            map.set(x, rect.y, Tile::Wall);
-            map.set(x, rect.y + rect.h - 1, Tile::Wall);
+            map.set(x, rect.y, Tile::WALL);
+            map.set(x, rect.y + rect.h - 1, Tile::WALL);
         }
         for y in rect.y..rect.y + rect.h {
-            map.set(rect.x, y, Tile::Wall);
-            map.set(rect.x + rect.w - 1, y, Tile::Wall);
+            map.set(rect.x, y, Tile::WALL);
+            map.set(rect.x + rect.w - 1, y, Tile::WALL);
         }
         for y in (rect.y + 1)..(rect.y + rect.h - 1) {
             for x in (rect.x + 1)..(rect.x + rect.w - 1) {
-                map.set(x, y, Tile::Floor);
+                map.set(x, y, Tile::FLOOR);
             }
         }
-        map.set(5, 3, Tile::Door);
+        map.set(5, 3, Tile::DOOR);
         map
     }
 

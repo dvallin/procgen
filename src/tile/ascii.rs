@@ -3,11 +3,18 @@ use std::collections::HashMap;
 use crate::entity::plan::{EntityArchetypeId, EntityPlan};
 use crate::feature::plan::{FeatureKind, FeaturePlan};
 use crate::geometry::geom::Point;
-use crate::tile::map::{Tile, TileMap};
+use crate::tile::map::TileMap;
+use crate::tile::registry::{Tile, TileId, TileRegistry};
 
 /// Renders a `TileMap` with an overlay map applied on top.
 /// Overlay characters take priority over the underlying tile.
-fn render_with_overlay(map: &TileMap, overlay: &HashMap<Point, char>) -> String {
+/// When a registry is provided, it is used to look up tile characters;
+/// otherwise the built-in `tile_char` fallback is used.
+fn render_with_overlay(
+    map: &TileMap,
+    overlay: &HashMap<Point, char>,
+    registry: Option<&TileRegistry>,
+) -> String {
     let mut out = String::new();
 
     for y in 0..map.height as i32 {
@@ -16,7 +23,10 @@ fn render_with_overlay(map: &TileMap, overlay: &HashMap<Point, char>) -> String 
             let ch = if let Some(&oc) = overlay.get(&pt) {
                 oc
             } else {
-                tile_char(map.get(x, y).unwrap_or(Tile::Void))
+                match registry {
+                    Some(reg) => reg.ascii_char(map.get(x, y).unwrap_or(Tile::VOID)),
+                    None => tile_char(map.get(x, y).unwrap_or(Tile::VOID)),
+                }
             };
             out.push(ch);
         }
@@ -27,13 +37,19 @@ fn render_with_overlay(map: &TileMap, overlay: &HashMap<Point, char>) -> String 
 }
 
 /// Returns the ASCII character for a tile.
-fn tile_char(tile: Tile) -> char {
-    match tile {
-        Tile::Void => ' ',
-        Tile::Floor => '.',
-        Tile::Wall => '#',
-        Tile::Door => '+',
-        Tile::LockedDoor => '*',
+fn tile_char(tile: TileId) -> char {
+    if tile == Tile::VOID {
+        ' '
+    } else if tile == Tile::FLOOR {
+        '.'
+    } else if tile == Tile::WALL {
+        '#'
+    } else if tile == Tile::DOOR {
+        '+'
+    } else if tile == Tile::LOCKED_DOOR {
+        '*'
+    } else {
+        '?'
     }
 }
 
@@ -51,7 +67,12 @@ fn build_feature_overlay(features: &FeaturePlan) -> HashMap<Point, char> {
 
 /// Renders a `TileMap` as an ASCII string (one char per tile, newline per row).
 pub fn render_ascii(map: &TileMap) -> String {
-    render_with_overlay(map, &HashMap::new())
+    render_with_overlay(map, &HashMap::new(), None)
+}
+
+/// Renders a `TileMap` as an ASCII string using the registry for tile characters.
+pub fn render_ascii_with_registry(map: &TileMap, registry: &TileRegistry) -> String {
+    render_with_overlay(map, &HashMap::new(), Some(registry))
 }
 
 /// Returns the ASCII character used to represent a given `FeatureKind`.
@@ -64,7 +85,13 @@ pub fn feature_char(kind: &FeatureKind) -> char {
         FeatureKind::Shelf => '=',
         FeatureKind::Table => 'T',
         FeatureKind::Trap => '^',
-        FeatureKind::Decoration(_) => '~',
+        FeatureKind::Decoration(name) => match name.as_str() {
+            "moss" | "vines" | "fungus" => ',',
+            "stalagmite" | "stalactite" | "crystal" => '\u{00a4}',
+            "torch" | "lantern" => '!',
+            "banner" | "tapestry" => '|',
+            _ => '*',
+        },
     }
 }
 
@@ -73,7 +100,7 @@ pub fn feature_char(kind: &FeatureKind) -> char {
 /// Feature cells take priority over the underlying tile character. If multiple
 /// features occupy the same cell, the last one in the plan wins.
 pub fn render_ascii_with_features(map: &TileMap, features: &FeaturePlan) -> String {
-    render_with_overlay(map, &build_feature_overlay(features))
+    render_with_overlay(map, &build_feature_overlay(features), None)
 }
 
 /// Returns the ASCII character used to represent an entity archetype.
@@ -111,7 +138,22 @@ pub fn render_ascii_with_entities(
         let ch = entity_char(&entity.archetype);
         overlay.insert(entity.position, ch);
     }
-    render_with_overlay(map, &overlay)
+    render_with_overlay(map, &overlay, None)
+}
+
+/// Renders a `TileMap` with feature and entity overlays using the tile registry.
+pub fn render_ascii_full(
+    map: &TileMap,
+    features: &FeaturePlan,
+    entities: &EntityPlan,
+    registry: &TileRegistry,
+) -> String {
+    let mut overlay = build_feature_overlay(features);
+    for entity in &entities.entities {
+        let ch = entity_char(&entity.archetype);
+        overlay.insert(entity.position, ch);
+    }
+    render_with_overlay(map, &overlay, Some(registry))
 }
 
 #[cfg(test)]
@@ -120,7 +162,8 @@ mod tests {
     use crate::feature::plan::{FeatureKind, FeaturePlacement, FeaturePlan};
     use crate::geometry::geom::Point;
     use crate::spatial::plan::SpaceId;
-    use crate::tile::map::{Tile, TileMap};
+    use crate::tile::map::TileMap;
+    use crate::tile::registry::Tile;
 
     /// Helper: builds a 5×5 room with walls on the border, a door on the north
     /// edge at (2,0), and floor tiles inside.
@@ -129,15 +172,15 @@ mod tests {
         for y in 0..5i32 {
             for x in 0..5i32 {
                 let tile = if x == 0 || x == 4 || y == 0 || y == 4 {
-                    Tile::Wall
+                    Tile::WALL
                 } else {
-                    Tile::Floor
+                    Tile::FLOOR
                 };
                 map.set(x, y, tile);
             }
         }
         // Place a door on the north wall.
-        map.set(2, 0, Tile::Door);
+        map.set(2, 0, Tile::DOOR);
         map
     }
 
@@ -216,7 +259,28 @@ mod tests {
         assert_eq!(feature_char(&FeatureKind::Shelf), '=');
         assert_eq!(feature_char(&FeatureKind::Table), 'T');
         assert_eq!(feature_char(&FeatureKind::Trap), '^');
-        assert_eq!(feature_char(&FeatureKind::Decoration("torch".into())), '~');
+        assert_eq!(feature_char(&FeatureKind::Decoration("torch".into())), '!');
+    }
+
+    #[test]
+    fn cosmetic_decoration_chars() {
+        assert_eq!(feature_char(&FeatureKind::Decoration("moss".into())), ',');
+        assert_eq!(feature_char(&FeatureKind::Decoration("vines".into())), ',');
+        assert_eq!(feature_char(&FeatureKind::Decoration("fungus".into())), ',');
+        assert_eq!(
+            feature_char(&FeatureKind::Decoration("stalagmite".into())),
+            '\u{00a4}'
+        );
+        assert_eq!(
+            feature_char(&FeatureKind::Decoration("stalactite".into())),
+            '\u{00a4}'
+        );
+        assert_eq!(
+            feature_char(&FeatureKind::Decoration("crystal".into())),
+            '\u{00a4}'
+        );
+        assert_eq!(feature_char(&FeatureKind::Decoration("torch".into())), '!');
+        assert_eq!(feature_char(&FeatureKind::Decoration("banner".into())), '|');
     }
 
     #[test]

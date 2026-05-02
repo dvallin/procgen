@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::geometry::geom::{Point, Rect};
-use crate::tile::map::{Tile, TileMap};
+use crate::tile::map::TileMap;
+use crate::tile::registry::Tile;
 
 /// How a feature should be positioned inside a room.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,9 +26,10 @@ pub enum PlacementStrategy {
 /// Returns true if any cardinal neighbor of `p` is a Door or LockedDoor.
 /// Features placed next to doors would block passage.
 fn is_door_adjacent(map: &TileMap, p: Point) -> bool {
-    p.cardinals()
-        .iter()
-        .any(|n| matches!(map.get(n.x, n.y), Some(Tile::Door) | Some(Tile::LockedDoor)))
+    p.cardinals().iter().any(|n| {
+        let t = map.get(n.x, n.y);
+        t == Some(Tile::DOOR) || t == Some(Tile::LOCKED_DOOR)
+    })
 }
 
 /// Find the walkable `Floor` tile closest to the room center,
@@ -41,7 +43,7 @@ pub fn find_center_tile(map: &TileMap, rect: Rect, occupied: &HashSet<Point>) ->
 
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| map.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| map.get(p.x, p.y) == Some(Tile::FLOOR))
         .filter(|p| !is_door_adjacent(map, *p))
         .min_by_key(|p| {
             let dx = p.x - center.x;
@@ -60,12 +62,12 @@ pub fn find_wall_adjacent_tiles(
 ) -> Vec<Point> {
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| map.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| map.get(p.x, p.y) == Some(Tile::FLOOR))
         .filter(|p| !is_door_adjacent(map, *p))
         .filter(|p| {
             p.cardinals()
                 .iter()
-                .any(|n| map.get(n.x, n.y) == Some(Tile::Wall))
+                .any(|n| map.get(n.x, n.y) == Some(Tile::WALL))
         })
         .collect()
 }
@@ -80,13 +82,13 @@ pub fn find_wall_adjacent_tiles(
 pub fn find_corner_tiles(map: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> Vec<Point> {
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| map.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| map.get(p.x, p.y) == Some(Tile::FLOOR))
         .filter(|p| !is_door_adjacent(map, *p))
         .filter(|p| {
-            let near_north_wall = (1..=2).any(|dy| map.get(p.x, p.y - dy) == Some(Tile::Wall));
-            let near_south_wall = (1..=2).any(|dy| map.get(p.x, p.y + dy) == Some(Tile::Wall));
-            let near_west_wall = (1..=2).any(|dx| map.get(p.x - dx, p.y) == Some(Tile::Wall));
-            let near_east_wall = (1..=2).any(|dx| map.get(p.x + dx, p.y) == Some(Tile::Wall));
+            let near_north_wall = (1..=2).any(|dy| map.get(p.x, p.y - dy) == Some(Tile::WALL));
+            let near_south_wall = (1..=2).any(|dy| map.get(p.x, p.y + dy) == Some(Tile::WALL));
+            let near_west_wall = (1..=2).any(|dx| map.get(p.x - dx, p.y) == Some(Tile::WALL));
+            let near_east_wall = (1..=2).any(|dx| map.get(p.x + dx, p.y) == Some(Tile::WALL));
 
             let near_vertical_wall = near_north_wall || near_south_wall;
             let near_horizontal_wall = near_west_wall || near_east_wall;
@@ -101,7 +103,7 @@ pub fn find_corner_tiles(map: &TileMap, rect: Rect, occupied: &HashSet<Point>) -
 pub fn find_floor_tiles(map: &TileMap, rect: Rect, occupied: &HashSet<Point>) -> Vec<Point> {
     rect.iter_points()
         .filter(|p| !occupied.contains(p))
-        .filter(|p| map.get(p.x, p.y) == Some(Tile::Floor))
+        .filter(|p| map.get(p.x, p.y) == Some(Tile::FLOOR))
         .filter(|p| !is_door_adjacent(map, *p))
         .collect()
 }
@@ -134,23 +136,23 @@ mod tests {
 
         // Walls around perimeter of the rect.
         for x in 1..6 {
-            map.set(x, 1, Tile::Wall);
-            map.set(x, 5, Tile::Wall);
+            map.set(x, 1, Tile::WALL);
+            map.set(x, 5, Tile::WALL);
         }
         for y in 1..6 {
-            map.set(1, y, Tile::Wall);
-            map.set(5, y, Tile::Wall);
+            map.set(1, y, Tile::WALL);
+            map.set(5, y, Tile::WALL);
         }
 
         // Floor interior.
         for y in 2..5 {
             for x in 2..5 {
-                map.set(x, y, Tile::Floor);
+                map.set(x, y, Tile::FLOOR);
             }
         }
 
         // Door on east wall.
-        map.set(5, 3, Tile::Door);
+        map.set(5, 3, Tile::DOOR);
 
         (map, rect)
     }
@@ -175,7 +177,7 @@ mod tests {
         let p = result.expect("should find a tile");
         assert_ne!(p, Point { x: 3, y: 3 });
         // Must still be Floor.
-        assert_eq!(map.get(p.x, p.y), Some(Tile::Floor));
+        assert_eq!(map.get(p.x, p.y), Some(Tile::FLOOR));
     }
 
     #[test]
@@ -188,11 +190,11 @@ mod tests {
         // Note: (4,3) has a Door (not Wall) to the east, so it does NOT qualify.
         assert_eq!(candidates.len(), 7);
         for p in &candidates {
-            assert_eq!(map.get(p.x, p.y), Some(Tile::Floor));
+            assert_eq!(map.get(p.x, p.y), Some(Tile::FLOOR));
             let has_wall = p
                 .cardinals()
                 .iter()
-                .any(|n| map.get(n.x, n.y) == Some(Tile::Wall));
+                .any(|n| map.get(n.x, n.y) == Some(Tile::WALL));
             assert!(has_wall, "tile {:?} should be next to a wall", p);
         }
     }
@@ -221,7 +223,7 @@ mod tests {
         // The center (3,3) is also within 2 tiles of walls in both directions.
         assert!(!candidates.is_empty());
         for p in &candidates {
-            assert_eq!(map.get(p.x, p.y), Some(Tile::Floor));
+            assert_eq!(map.get(p.x, p.y), Some(Tile::FLOOR));
         }
     }
 
@@ -235,7 +237,7 @@ mod tests {
         // (4,3) is adjacent to the door, so it's excluded. 9 - 1 = 8.
         assert_eq!(candidates.len(), 8);
         for p in &candidates {
-            assert_eq!(map.get(p.x, p.y), Some(Tile::Floor));
+            assert_eq!(map.get(p.x, p.y), Some(Tile::FLOOR));
         }
         // Verify door-adjacent tile is excluded.
         assert!(!candidates.contains(&Point { x: 4, y: 3 }));

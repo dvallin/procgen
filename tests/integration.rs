@@ -6,8 +6,8 @@ use procgen::intent::builder::IntentBuilder;
 use procgen::intent::generic_builder::GenericIntentBuilder;
 use procgen::intent::map_intent::MapIntent;
 use procgen::spatial::planner::{SimpleSpatialPlanner, SpatialPlanner};
-use procgen::tile::map::Tile;
 use procgen::tile::rasterize::{Rasterizer, SimpleRasterizer};
+use procgen::tile::registry::{Tile, TileRegistry};
 use procgen::validate::Validator;
 
 /// Helper: build the crypt MapIntent via the Phase 2 path.
@@ -27,7 +27,9 @@ fn run_full_pipeline() -> procgen::tile::map::TileMap {
     let geometry_plan = SimpleGeometryPlanner::default()
         .plan(&spatial_plan)
         .unwrap();
-    SimpleRasterizer.rasterize(&geometry_plan).unwrap()
+    SimpleRasterizer
+        .rasterize(&geometry_plan, &TileRegistry::default_registry())
+        .unwrap()
 }
 
 /// Helper: run up to the spatial plan stage.
@@ -55,25 +57,25 @@ fn crypt_pipeline_produces_valid_map() {
 
     // There is at least one Floor tile
     assert!(
-        map.tiles.iter().any(|t| *t == Tile::Floor),
+        map.tiles.iter().any(|t| *t == Tile::FLOOR),
         "map should contain at least one Floor tile"
     );
 
     // There is at least one Door tile
     assert!(
-        map.tiles.iter().any(|t| *t == Tile::Door),
+        map.tiles.iter().any(|t| *t == Tile::DOOR),
         "map should contain at least one Door tile"
     );
 
     // There is at least one LockedDoor tile (from the restricted traversal)
     assert!(
-        map.tiles.iter().any(|t| *t == Tile::LockedDoor),
+        map.tiles.iter().any(|t| *t == Tile::LOCKED_DOOR),
         "map should contain at least one LockedDoor tile"
     );
 
     // There is at least one Wall tile
     assert!(
-        map.tiles.iter().any(|t| *t == Tile::Wall),
+        map.tiles.iter().any(|t| *t == Tile::WALL),
         "map should contain at least one Wall tile"
     );
 }
@@ -199,7 +201,9 @@ fn run_tavern_pipeline() -> procgen::tile::map::TileMap {
     let geometry_plan = SimpleGeometryPlanner::default()
         .plan(&spatial_plan)
         .unwrap();
-    SimpleRasterizer.rasterize(&geometry_plan).unwrap()
+    SimpleRasterizer
+        .rasterize(&geometry_plan, &TileRegistry::default_registry())
+        .unwrap()
 }
 
 /// Helper: tavern spatial plan.
@@ -223,9 +227,9 @@ fn tavern_pipeline_produces_valid_map() {
 
     assert!(map.width > 0);
     assert!(map.height > 0);
-    assert!(map.tiles.iter().any(|t| *t == Tile::Floor));
-    assert!(map.tiles.iter().any(|t| *t == Tile::Door));
-    assert!(map.tiles.iter().any(|t| *t == Tile::Wall));
+    assert!(map.tiles.iter().any(|t| *t == Tile::FLOOR));
+    assert!(map.tiles.iter().any(|t| *t == Tile::DOOR));
+    assert!(map.tiles.iter().any(|t| *t == Tile::WALL));
     // GenericIntentBuilder may or may not produce a Gate node, so LockedDoor is optional.
     // Just verify the map is structurally valid (has doors and walls).
 }
@@ -404,7 +408,7 @@ fn assert_doors_connect_two_sides(map: &procgen::tile::map::TileMap, label: &str
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
             let tile = map.get(x, y).unwrap();
-            if tile != Tile::Door && tile != Tile::LockedDoor {
+            if tile != Tile::DOOR && tile != Tile::LOCKED_DOOR {
                 continue;
             }
             let walkable_count = Point { x, y }
@@ -461,7 +465,9 @@ fn run_crypt_features() -> (
     let geometry = SimpleGeometryPlanner::default()
         .plan_with_validation(&spatial)
         .unwrap();
-    let map = SimpleRasterizer.rasterize(&geometry).unwrap();
+    let map = SimpleRasterizer
+        .rasterize(&geometry, &TileRegistry::default_registry())
+        .unwrap();
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_rules();
     let features = SimpleFeaturePlanner
@@ -482,7 +488,9 @@ fn run_tavern_features() -> (
     let geometry = SimpleGeometryPlanner::default()
         .plan_with_validation(&spatial)
         .unwrap();
-    let map = SimpleRasterizer.rasterize(&geometry).unwrap();
+    let map = SimpleRasterizer
+        .rasterize(&geometry, &TileRegistry::default_registry())
+        .unwrap();
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_rules();
     let features = SimpleFeaturePlanner
@@ -816,7 +824,7 @@ mod stress_tests {
             prop_assert!(geometry.is_ok(), "geometry planning failed: {:?}", geometry.err());
 
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&geometry.unwrap());
+            let map = rasterizer.rasterize(&geometry.unwrap(), &TileRegistry::default_registry());
             prop_assert!(map.is_ok(), "rasterization failed: {:?}", map.err());
             let map = map.unwrap();
 
@@ -849,7 +857,7 @@ mod stress_tests {
             let geometry = geometry.unwrap();
 
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&geometry);
+            let map = rasterizer.rasterize(&geometry, &TileRegistry::default_registry());
             prop_assert!(map.is_ok());
             let map = map.unwrap();
 
@@ -877,13 +885,13 @@ mod stress_tests {
             prop_assert!(geometry.is_ok());
 
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&geometry.unwrap());
+            let map = rasterizer.rasterize(&geometry.unwrap(), &TileRegistry::default_registry());
             prop_assert!(map.is_ok());
             let map = map.unwrap();
 
             for y in 0..map.height as i32 {
                 for x in 0..map.width as i32 {
-                    if map.get(x, y) != Some(Tile::Floor) {
+                    if map.get(x, y) != Some(Tile::FLOOR) {
                         continue;
                     }
                     let pos = Point { x, y };
@@ -893,7 +901,7 @@ mod stress_tests {
                         }
                         let neighbor = map.get(n.x, n.y).unwrap();
                         prop_assert!(
-                            neighbor != Tile::Void,
+                            neighbor != Tile::VOID,
                             "Floor at ({}, {}) has Void neighbor at ({}, {})",
                             x, y, n.x, n.y
                         );
@@ -910,14 +918,14 @@ mod stress_tests {
             prop_assert!(geometry.is_ok());
 
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&geometry.unwrap());
+            let map = rasterizer.rasterize(&geometry.unwrap(), &TileRegistry::default_registry());
             prop_assert!(map.is_ok());
             let map = map.unwrap();
 
             for y in 0..map.height as i32 {
                 for x in 0..map.width as i32 {
                     let tile = map.get(x, y).unwrap();
-                    if tile != Tile::Door && tile != Tile::LockedDoor {
+                    if tile != Tile::DOOR && tile != Tile::LOCKED_DOOR {
                         continue;
                     }
                     let walkable_count = Point { x, y }

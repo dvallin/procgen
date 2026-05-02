@@ -231,5 +231,119 @@
         ]
       }
     ]
+  },
+  {
+    "id": "natural_cave",
+    "name": "Natural Cave",
+    "description": "A sprawling natural cave system with underground pools, collapsed passages, and bioluminescent fungi.",
+    "location_kind": "Dungeon",
+    "motifs": ["stone", "damp", "natural"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "Cave Mouth",
+            "tags": ["natural", "overgrown"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Narrow Squeeze",
+            "tags": ["narrow", "rocky"],
+            "archetype": "Corridor"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Grand Cavern",
+            "tags": ["vast", "echoing"],
+            "archetype": "Hall"
+          },
+          {
+            "label": "Fungal Garden",
+            "tags": ["overgrown", "luminous"],
+            "archetype": "Hall"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Rock Fall",
+            "tags": ["collapsed", "locked"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Narrow Fissure",
+            "tags": ["narrow", "locked"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Crystal Grotto",
+            "tags": ["main_goal", "luminous"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Underground Lake",
+            "tags": ["main_goal", "flooded"],
+            "archetype": "Vault"
+          }
+        ]
+      },
+      {
+        "role": "Reward",
+        "entries": [
+          {
+            "label": "Gem Vein",
+            "tags": ["optional", "valuable"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Hidden Grotto",
+            "tags": ["optional", "secluded"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Dripping Pool",
+            "tags": ["optional", "flooded"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Bat Colony",
+            "tags": ["optional", "guano"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Natural Tunnel",
+            "tags": ["rocky", "narrow"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Underground Stream",
+            "tags": ["flooded", "damp"],
+            "archetype": "Corridor"
+          }
+        ]
+      }
+    ]
   }
 ]

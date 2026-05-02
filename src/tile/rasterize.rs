@@ -1,5 +1,6 @@
 use crate::geometry::geom::*;
 use crate::tile::map::*;
+use crate::tile::registry::{Tile, TileRegistry};
 use tracing::{debug, info, info_span};
 
 #[derive(Debug)]
@@ -18,14 +19,22 @@ impl std::fmt::Display for RasterizeError {
 impl std::error::Error for RasterizeError {}
 
 pub trait Rasterizer {
-    fn rasterize(&self, layout: &GeometryPlan) -> Result<TileMap, RasterizeError>;
+    fn rasterize(
+        &self,
+        layout: &GeometryPlan,
+        registry: &TileRegistry,
+    ) -> Result<TileMap, RasterizeError>;
 }
 
 #[derive(Default)]
 pub struct SimpleRasterizer;
 
 impl Rasterizer for SimpleRasterizer {
-    fn rasterize(&self, layout: &GeometryPlan) -> Result<TileMap, RasterizeError> {
+    fn rasterize(
+        &self,
+        layout: &GeometryPlan,
+        registry: &TileRegistry,
+    ) -> Result<TileMap, RasterizeError> {
         if layout.spaces.is_empty() {
             return Err(RasterizeError::EmptyLayout);
         }
@@ -62,13 +71,17 @@ impl Rasterizer for SimpleRasterizer {
             carve_link(&mut map, link);
         }
 
-        infer_walls(&mut map);
+        infer_walls(&mut map, registry);
 
         {
-            let floor_count = map.tiles.iter().filter(|t| **t == Tile::Floor).count();
-            let wall_count = map.tiles.iter().filter(|t| **t == Tile::Wall).count();
-            let door_count = map.tiles.iter().filter(|t| **t == Tile::Door).count();
-            let locked_count = map.tiles.iter().filter(|t| **t == Tile::LockedDoor).count();
+            let floor_count = map.tiles.iter().filter(|t| **t == Tile::FLOOR).count();
+            let wall_count = map.tiles.iter().filter(|t| **t == Tile::WALL).count();
+            let door_count = map.tiles.iter().filter(|t| **t == Tile::DOOR).count();
+            let locked_count = map
+                .tiles
+                .iter()
+                .filter(|t| **t == Tile::LOCKED_DOOR)
+                .count();
             info!(
                 floor = floor_count,
                 wall = wall_count,
@@ -87,13 +100,13 @@ fn fill_room(map: &mut TileMap, footprint: &Footprint) {
         Footprint::Rect(rect) => {
             for y in rect.y + 1..rect.y + rect.h - 1 {
                 for x in rect.x + 1..rect.x + rect.w - 1 {
-                    map.set(x, y, Tile::Floor);
+                    map.set(x, y, Tile::FLOOR);
                 }
             }
         }
         Footprint::Cells(cells) => {
             for p in cells {
-                map.set(p.x, p.y, Tile::Floor);
+                map.set(p.x, p.y, Tile::FLOOR);
             }
         }
         Footprint::Composite(parts) => {
@@ -113,7 +126,7 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
             let (from, to) = if a.y <= b.y { (a.y, b.y) } else { (b.y, a.y) };
             for y in from..=to {
                 let existing = map.get(a.x, y);
-                if existing == Some(Tile::Door) || existing == Some(Tile::LockedDoor) {
+                if existing == Some(Tile::DOOR) || existing == Some(Tile::LOCKED_DOOR) {
                     debug!(
                         x = a.x,
                         y = y,
@@ -121,13 +134,13 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
                     );
                     continue;
                 }
-                map.set(a.x, y, Tile::Floor);
+                map.set(a.x, y, Tile::FLOOR);
             }
         } else if a.y == b.y {
             let (from, to) = if a.x <= b.x { (a.x, b.x) } else { (b.x, a.x) };
             for x in from..=to {
                 let existing = map.get(x, a.y);
-                if existing == Some(Tile::Door) || existing == Some(Tile::LockedDoor) {
+                if existing == Some(Tile::DOOR) || existing == Some(Tile::LOCKED_DOOR) {
                     debug!(
                         x = x,
                         y = a.y,
@@ -135,7 +148,7 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
                     );
                     continue;
                 }
-                map.set(x, a.y, Tile::Floor);
+                map.set(x, a.y, Tile::FLOOR);
             }
         }
     }
@@ -145,8 +158,8 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
             start.x,
             start.y,
             match link.kind {
-                LinkKind::Restricted => Tile::LockedDoor,
-                _ => Tile::Door,
+                LinkKind::Restricted => Tile::LOCKED_DOOR,
+                _ => Tile::DOOR,
             },
         );
     }
@@ -156,20 +169,20 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
             end.x,
             end.y,
             match link.kind {
-                LinkKind::Restricted => Tile::LockedDoor,
-                _ => Tile::Door,
+                LinkKind::Restricted => Tile::LOCKED_DOOR,
+                _ => Tile::DOOR,
             },
         );
     }
 }
 
-fn infer_walls(map: &mut TileMap) {
+fn infer_walls(map: &mut TileMap, registry: &TileRegistry) {
     let original = map.tiles.clone();
 
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
             let idx = (y as u32 * map.width + x as u32) as usize;
-            if original[idx] != Tile::Void {
+            if original[idx] != Tile::VOID {
                 continue;
             }
 
@@ -179,11 +192,11 @@ fn infer_walls(map: &mut TileMap) {
                     return false;
                 }
                 let nidx = (n.y as u32 * map.width + n.x as u32) as usize;
-                original[nidx].is_walkable()
+                registry.is_walkable(original[nidx])
             });
 
             if touches_floorish {
-                map.set(x, y, Tile::Wall);
+                map.set(x, y, Tile::WALL);
             }
         }
     }
@@ -196,8 +209,12 @@ mod tests {
         Footprint, GeometryPlan, LinkKind, PlacedLink, PlacedSpace, Point, Rect,
     };
     use crate::spatial::plan::{RealizationStyle, SpaceId};
-    use crate::tile::map::Tile;
+    use crate::tile::registry::Tile;
     use proptest::prelude::*;
+
+    fn registry() -> TileRegistry {
+        TileRegistry::default_registry()
+    }
 
     fn arb_rect() -> impl Strategy<Value = Rect> {
         (0i32..30, 0i32..30, 3i32..=12, 3i32..=12).prop_map(|(x, y, w, h)| Rect { x, y, w, h })
@@ -294,11 +311,11 @@ mod tests {
             links: vec![link_a, link_b],
         };
 
-        let map = SimpleRasterizer.rasterize(&plan).unwrap();
+        let map = SimpleRasterizer.rasterize(&plan, &registry()).unwrap();
         let tile_at_shared = map.get(shared.x, shared.y);
 
         assert!(
-            tile_at_shared == Some(Tile::Door) || tile_at_shared == Some(Tile::LockedDoor),
+            tile_at_shared == Some(Tile::DOOR) || tile_at_shared == Some(Tile::LOCKED_DOOR),
             "Expected Door or LockedDoor at shared point ({}, {}), got {:?}",
             shared.x,
             shared.y,
@@ -313,11 +330,11 @@ mod tests {
         #[test]
         fn no_floor_adjacent_to_void(plan in arb_geometry_plan()) {
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&plan).unwrap();
+            let map = rasterizer.rasterize(&plan, &registry()).unwrap();
 
             for y in 0..map.height as i32 {
                 for x in 0..map.width as i32 {
-                    if map.get(x, y) != Some(Tile::Floor) {
+                    if map.get(x, y) != Some(Tile::FLOOR) {
                         continue;
                     }
                     let pos = Point { x, y };
@@ -327,7 +344,7 @@ mod tests {
                         }
                         let neighbor = map.get(n.x, n.y).unwrap();
                         prop_assert!(
-                            neighbor != Tile::Void,
+                            neighbor != Tile::VOID,
                             "Floor at ({}, {}) has Void neighbor at ({}, {})",
                             x, y, n.x, n.y
                         );
@@ -341,7 +358,7 @@ mod tests {
         #[test]
         fn room_interiors_are_floor(plan in arb_geometry_plan()) {
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&plan).unwrap();
+            let map = rasterizer.rasterize(&plan, &registry()).unwrap();
 
             for space in &plan.spaces {
                 let r = &space.rect;
@@ -365,12 +382,12 @@ mod tests {
         #[test]
         fn doors_have_walkable_neighbor(plan in arb_geometry_plan()) {
             let rasterizer = SimpleRasterizer;
-            let map = rasterizer.rasterize(&plan).unwrap();
+            let map = rasterizer.rasterize(&plan, &registry()).unwrap();
 
             for y in 0..map.height as i32 {
                 for x in 0..map.width as i32 {
                     let tile = map.get(x, y).unwrap();
-                    if tile != Tile::Door && tile != Tile::LockedDoor {
+                    if tile != Tile::DOOR && tile != Tile::LOCKED_DOOR {
                         continue;
                     }
                     let pos = Point { x, y };

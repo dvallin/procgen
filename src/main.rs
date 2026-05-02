@@ -1,9 +1,11 @@
 use clap::{Parser, ValueEnum};
 
+use procgen::demo::cave::build_cave_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
 use procgen::pipeline::{Pipeline, PipelineConfig};
-use procgen::tile::ascii::render_ascii_with_entities;
+use procgen::tile::ascii::render_ascii_full;
+use procgen::tile::registry::TileRegistry;
 use tracing_subscriber::EnvFilter;
 
 /// Procedural dungeon generator.
@@ -27,6 +29,7 @@ struct Cli {
 enum Scenario {
     Crypt,
     Tavern,
+    Cave,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -72,13 +75,19 @@ fn main() {
             println!("=== Tavern Cellar ===\n");
             pipeline.run(&situation)
         }
+        Scenario::Cave => {
+            let situation = build_cave_situation();
+            println!("=== Natural Cave ===\n");
+            pipeline.run(&situation)
+        }
     };
 
     match result {
         Ok(r) => {
+            let registry = TileRegistry::default_registry();
             println!(
                 "{}",
-                render_ascii_with_entities(&r.tiles, &r.features, &r.entities)
+                render_ascii_full(&r.tiles, &r.features, &r.entities, &registry)
             );
         }
         Err(e) => {

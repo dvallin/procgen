@@ -92,5 +92,38 @@
     "match_role": null,
     "match_archetype": null,
     "match_tag": "smuggling"
+  },
+  {
+    "kind": {
+      "Decoration": "moss"
+    },
+    "strategy": "RandomFloor",
+    "required": false,
+    "max_count": 3,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "overgrown"
+  },
+  {
+    "kind": {
+      "Decoration": "stalagmite"
+    },
+    "strategy": "RandomFloor",
+    "required": false,
+    "max_count": 2,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "vast"
+  },
+  {
+    "kind": {
+      "Decoration": "fungus"
+    },
+    "strategy": "RandomFloor",
+    "required": false,
+    "max_count": 3,
+    "match_role": null,
+    "match_archetype": null,
+    "match_tag": "luminous"
   }
 ]
