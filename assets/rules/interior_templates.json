@@ -1,0 +1,76 @@
+[
+  {
+    "name": "crypt_vault",
+    "match_role": "Goal",
+    "match_archetype": "Vault",
+    "match_tag": "main_goal",
+    "directives": [
+      { "zone": "Center", "action": { "Place": { "feature_type": "sarcophagus", "max_count": 1 } } },
+      { "zone": "WallBand", "action": { "Place": { "feature_type": "torch", "max_count": 2 } } },
+      { "zone": "DoorPath", "action": "Clear" }
+    ],
+    "priority": 10
+  },
+  {
+    "name": "sacred_chamber",
+    "match_role": null,
+    "match_archetype": "Workshop",
+    "match_tag": "sacred",
+    "directives": [
+      { "zone": "Center", "action": { "Place": { "feature_type": "altar", "max_count": 1 } } },
+      { "zone": "WallBand", "action": { "Place": { "feature_type": "banner", "max_count": 2 } } },
+      { "zone": "Corner", "action": { "Place": { "feature_type": "torch", "max_count": 2 } } },
+      { "zone": "DoorPath", "action": "Clear" }
+    ],
+    "priority": 5
+  },
+  {
+    "name": "storage_room",
+    "match_role": null,
+    "match_archetype": "Chamber",
+    "match_tag": "storage",
+    "directives": [
+      { "zone": "WallBand", "action": { "Place": { "feature_type": "shelf", "max_count": 2 } } },
+      { "zone": "Corner", "action": { "Place": { "feature_type": "barrel", "max_count": 2 } } },
+      { "zone": "Center", "action": "Clear" },
+      { "zone": "DoorPath", "action": "Clear" }
+    ],
+    "priority": 5
+  },
+  {
+    "name": "treasure_room",
+    "match_role": "Reward",
+    "match_archetype": null,
+    "match_tag": null,
+    "directives": [
+      { "zone": "Center", "action": { "Place": { "feature_type": "chest", "max_count": 1 } } },
+      { "zone": "Corner", "action": { "Place": { "feature_type": "barrel", "max_count": 1 } } },
+      { "zone": "DoorPath", "action": "Clear" }
+    ],
+    "priority": 3
+  },
+  {
+    "name": "hub_hall",
+    "match_role": "Hub",
+    "match_archetype": "Hall",
+    "match_tag": null,
+    "directives": [
+      { "zone": "Center", "action": { "Place": { "feature_type": "table", "max_count": 1 } } },
+      { "zone": "WallBand", "action": { "Place": { "feature_type": "torch", "max_count": 2 } } },
+      { "zone": "DoorPath", "action": "Clear" }
+    ],
+    "priority": 3
+  },
+  {
+    "name": "guard_post",
+    "match_role": "Gate",
+    "match_archetype": null,
+    "match_tag": "locked",
+    "directives": [
+      { "zone": "WallBand", "action": { "Place": { "feature_type": "torch", "max_count": 1 } } },
+      { "zone": "DoorPath", "action": "Clear" },
+      { "zone": "Center", "action": "Clear" }
+    ],
+    "priority": 3
+  }
+]

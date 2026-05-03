@@ -27,6 +27,10 @@ use crate::geometry::planner::{
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
 use crate::intent::generic_builder::GenericIntentBuilder;
 use crate::intent::map_intent::MapIntent;
+use crate::interior::builder::build_interior_plans;
+use crate::interior::paths::{compute_reserved_paths, find_room_doors};
+use crate::interior::plan::InteriorPlan;
+use crate::interior::template::InteriorTemplate;
 use crate::situation::SituationContext;
 use crate::spatial::plan::SpatialPlan;
 use crate::spatial::planner::{SimpleSpatialPlanner, SpatialPlanError, SpatialPlanner};
@@ -38,7 +42,7 @@ use crate::validate::entity::{EntityValidationInput, EntityValidator};
 use crate::validate::feature::{FeatureValidationInput, FeatureValidator};
 use crate::validate::geometry::GeometryValidator;
 use crate::validate::{Severity, Validator};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // PipelineConfig + RelaxationStrategy
@@ -79,6 +83,8 @@ pub struct PipelineConfig {
     /// Higher values produce denser, more varied atmosphere-driven content.
     /// Default: 3.
     pub atmosphere_sample_budget: usize,
+    /// Optional interior templates override. If `None`, loads from the default asset path.
+    pub interior_templates: Option<Vec<InteriorTemplate>>,
 }
 
 impl Default for PipelineConfig {
@@ -93,6 +99,7 @@ impl Default for PipelineConfig {
             feature_registry: None,
             atmosphere_profiles: None,
             atmosphere_sample_budget: 3,
+            interior_templates: None,
         }
     }
 }
@@ -116,6 +123,8 @@ pub struct PipelineResult {
     pub features: FeaturePlan,
     /// Placed entities (guards, rats, …).
     pub entities: EntityPlan,
+    /// Interior plans per room (zones, doors, reserved paths).
+    pub interiors: Vec<InteriorPlan>,
 }
 
 // ---------------------------------------------------------------------------
@@ -303,19 +312,47 @@ impl Pipeline {
         let mut tiles = SimpleRasterizer.rasterize(&geometry, &registry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
 
+        // ── 4b. Pre-compute reserved paths for scatter safety ──────────
+        let reserved_per_room: HashMap<
+            crate::spatial::plan::SpaceId,
+            HashSet<crate::geometry::geom::Point>,
+        > = geometry
+            .spaces
+            .iter()
+            .map(|placed| {
+                let doors = find_room_doors(&tiles, placed.rect);
+                let (_, reserved) = compute_reserved_paths(&tiles, placed.rect, &doors);
+                (placed.space_id, reserved)
+            })
+            .collect();
+
         // ── 5. Atmosphere (scatter + per-room rules) ───────────────
-        let (per_room_feature_rules, per_room_entity_rules) =
-            self.apply_atmosphere(&spatial, &geometry, &mut tiles, &registry, &mut rng);
+        let (per_room_feature_rules, per_room_entity_rules) = self.apply_atmosphere(
+            &spatial,
+            &geometry,
+            &mut tiles,
+            &registry,
+            &mut rng,
+            &reserved_per_room,
+        );
+
+        // ── 5b. Interior planning ──────────────────────────────────────
+        info!("computing interior plans");
+        let interiors = build_interior_plans(&geometry, &tiles);
+        debug!(rooms = interiors.len(), "interior plans ready");
 
         // ── 6. Feature planning + validation ───────────────────────
         info!("planning features");
         let feature_rules = self.resolve_feature_rules();
+        let interior_templates = self.resolve_interior_templates();
         let features = SimpleFeaturePlanner.plan(
             &spatial,
             &geometry,
             &tiles,
             &feature_rules,
             &per_room_feature_rules,
+            &interiors,
+            &interior_templates,
             &mut rng,
         )?;
         self.validate_features(&features, &tiles, &geometry, &spatial)?;
@@ -342,6 +379,7 @@ impl Pipeline {
             tiles,
             features,
             entities,
+            interiors,
         })
     }
 
@@ -507,6 +545,15 @@ impl Pipeline {
         }
     }
 
+    /// Resolve interior templates from config or defaults.
+    fn resolve_interior_templates(&self) -> Vec<InteriorTemplate> {
+        match &self.config.interior_templates {
+            Some(templates) => templates.clone(),
+            None => crate::asset::load::load_default_interior_templates()
+                .expect("embedded interior templates are valid JSON"),
+        }
+    }
+
     /// Apply atmosphere profiles: sample contributions per room, apply scatter
     /// to tiles, and return per-room feature/entity rules for downstream planners.
     fn apply_atmosphere(
@@ -516,6 +563,10 @@ impl Pipeline {
         tiles: &mut TileMap,
         registry: &TileRegistry,
         rng: &mut StdRng,
+        reserved_per_room: &HashMap<
+            crate::spatial::plan::SpaceId,
+            HashSet<crate::geometry::geom::Point>,
+        >,
     ) -> (
         HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>>,
         HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>>,
@@ -534,6 +585,13 @@ impl Pipeline {
         if atmosphere_profiles.is_empty() {
             return (per_room_feature_rules, per_room_entity_rules);
         }
+
+        let _span = info_span!(
+            "atmosphere_planning",
+            profiles = atmosphere_profiles.len(),
+            rooms = spatial.spaces.len(),
+        )
+        .entered();
 
         info!(
             profiles = atmosphere_profiles.len(),
@@ -569,7 +627,11 @@ impl Pipeline {
         // to preserve the original RNG consumption order).
         for placed in &geometry.spaces {
             if let Some(rules) = per_room_scatter.get(&placed.space_id) {
-                scatter_room(tiles, placed.rect, rules, registry, rng);
+                let reserved = reserved_per_room
+                    .get(&placed.space_id)
+                    .cloned()
+                    .unwrap_or_default();
+                scatter_room(tiles, placed.rect, rules, registry, rng, &reserved);
             }
         }
 
@@ -613,6 +675,7 @@ mod tests {
         assert!(cfg.seed.is_none());
         assert!(cfg.feature_rules.is_none());
         assert!(cfg.entity_rules.is_none());
+        assert!(cfg.interior_templates.is_none());
         match &cfg.relaxation {
             RelaxationStrategy::IncreaseSpacing { step } => assert_eq!(*step, 2),
             RelaxationStrategy::None => panic!("expected IncreaseSpacing"),
@@ -632,6 +695,7 @@ mod tests {
                 feature_registry: None,
                 atmosphere_profiles: None,
                 atmosphere_sample_budget: 3,
+                interior_templates: None,
             },
         };
         let base = PlacementConfig::default();
@@ -653,6 +717,7 @@ mod tests {
                 feature_registry: None,
                 atmosphere_profiles: None,
                 atmosphere_sample_budget: 3,
+                interior_templates: None,
             },
         };
         let base = PlacementConfig {

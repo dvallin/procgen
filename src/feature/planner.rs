@@ -4,6 +4,10 @@
 //! is the MVP implementation: it matches [`default_rules`](super::rules::default_rules)
 //! against each room's role/archetype/tags and uses placement strategies to
 //! find positions.
+//!
+//! When interior templates are provided, the planner uses zone-aware placement
+//! for rooms that match a template, respecting `Clear` directives and placing
+//! features in the specified zones.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,9 +18,10 @@ use crate::feature::placement::*;
 use crate::feature::plan::*;
 use crate::feature::rules::{FeatureRule, matching_rules};
 use crate::geometry::geom::GeometryPlan;
+use crate::interior::plan::{InteriorPlan, ZoneKind};
+use crate::interior::template::{InteriorTemplate, ZoneAction, match_template};
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
 use crate::tile::map::TileMap;
-use crate::tile::registry::Tile;
 
 /// Trait for producing a [`FeaturePlan`] from upstream layers.
 pub trait FeaturePlanner {
@@ -27,6 +32,8 @@ pub trait FeaturePlanner {
     /// The `rules` slice determines which features get placed in which rooms.
     /// The `per_room_rules` map provides atmosphere-contributed rules that
     /// apply only to specific rooms (keyed by SpaceId).
+    /// The `templates` slice provides zone-aware interior templates that
+    /// override generic rule placement for matched rooms.
     fn plan(
         &self,
         spatial: &SpatialPlan,
@@ -34,6 +41,8 @@ pub trait FeaturePlanner {
         tiles: &TileMap,
         rules: &[FeatureRule],
         per_room_rules: &HashMap<SpaceId, Vec<FeatureRule>>,
+        interiors: &[InteriorPlan],
+        templates: &[InteriorTemplate],
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError>;
 }
@@ -54,6 +63,8 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         tiles: &TileMap,
         rules: &[FeatureRule],
         per_room_rules: &HashMap<SpaceId, Vec<FeatureRule>>,
+        interiors: &[InteriorPlan],
+        templates: &[InteriorTemplate],
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError> {
         let _span = info_span!("feature_planning", rooms = geometry.spaces.len(),).entered();
@@ -62,16 +73,15 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         let spec_map: HashMap<SpaceId, &SpaceSpec> =
             spatial.spaces.iter().map(|s| (s.id, s)).collect();
 
+        // Build SpaceId → InteriorPlan lookup.
+        let interior_map: HashMap<SpaceId, &InteriorPlan> =
+            interiors.iter().map(|p| (p.space_id, p)).collect();
+        let empty_reserved: HashSet<crate::geometry::geom::Point> = HashSet::new();
+
         let mut features = Vec::new();
         // Global occupied set — prevents cross-room overlap on shared boundaries.
         let mut global_occupied: HashSet<crate::geometry::geom::Point> = HashSet::new();
-        // Global blocking set — only cells from features that block movement.
-        // Used for the door-reachability BFS (non-blocking decorations don't count).
-        let mut global_blocking: HashSet<crate::geometry::geom::Point> = HashSet::new();
         let feature_registry = crate::feature::registry::FeatureRegistry::default_registry();
-
-        // Pre-compute all door positions once (avoids re-scanning the map per placement).
-        let all_doors = find_all_doors(tiles);
 
         for placed in &geometry.spaces {
             let Some(spec) = spec_map.get(&placed.space_id) else {
@@ -82,68 +92,167 @@ impl FeaturePlanner for SimpleFeaturePlanner {
                 continue;
             };
 
-            let matched = matching_rules(rules, spec);
-
-            // Also include per-room atmosphere rules for this space.
-            let atmosphere_rules = per_room_rules.get(&placed.space_id);
-            let all_matched: Vec<&FeatureRule> = matched
-                .into_iter()
-                .chain(
-                    atmosphere_rules
-                        .map(|v| v.iter().collect::<Vec<_>>())
-                        .unwrap_or_default(),
-                )
-                .collect();
-
-            if all_matched.is_empty() {
-                debug!(
-                    space_id = ?placed.space_id,
-                    label = ?placed.label,
-                    "no feature rules matched"
-                );
-                continue;
-            }
-
-            debug!(
-                space_id = ?placed.space_id,
-                label = ?placed.label,
-                rule_count = all_matched.len(),
-                "matched feature rules"
-            );
-
             let rect = placed.rect;
             // Per-room occupied starts from the global set (so we don't place
             // on tiles already claimed by an adjacent room's features).
             let mut room_occupied = global_occupied.clone();
-            let mut room_blocking = global_blocking.clone();
 
-            for rule in &all_matched {
-                let placed_count = place_rule(
-                    rule,
-                    placed.space_id,
-                    rect,
-                    tiles,
-                    &all_doors,
-                    &mut room_occupied,
-                    &mut room_blocking,
-                    &feature_registry,
-                    &mut features,
-                    rng,
-                )?;
+            // Check if an interior template matches this room.
+            let matched_template = match_template(templates, spec);
 
-                if placed_count > 0 {
+            if let Some(template) = matched_template {
+                // Template-driven placement: use zone cells.
+                debug!(
+                    space_id = ?placed.space_id,
+                    label = ?placed.label,
+                    template = %template.name,
+                    "applying interior template"
+                );
+
+                let interior = interior_map.get(&placed.space_id);
+
+                // Collect clear zones for blocking-feature exclusion.
+                let clear_zones: HashSet<ZoneKind> = template
+                    .directives
+                    .iter()
+                    .filter_map(|d| match &d.action {
+                        ZoneAction::Clear => Some(d.zone),
+                        _ => None,
+                    })
+                    .collect();
+
+                // Execute Place directives.
+                for directive in &template.directives {
+                    let ZoneAction::Place {
+                        ref feature_type,
+                        max_count,
+                    } = directive.action
+                    else {
+                        continue;
+                    };
+
+                    let placed_count = place_in_zone(
+                        feature_type,
+                        max_count,
+                        directive.zone,
+                        placed.space_id,
+                        interior,
+                        tiles,
+                        rect,
+                        &mut room_occupied,
+                        &mut features,
+                        rng,
+                    );
+
+                    if placed_count > 0 {
+                        debug!(
+                            space_id = ?placed.space_id,
+                            feature_type = %feature_type,
+                            zone = ?directive.zone,
+                            count = placed_count,
+                            "placed features via template"
+                        );
+                    }
+                }
+
+                // After template directives, also apply atmosphere rules
+                // (but respect clear zones for blocking features).
+                if let Some(atmo_rules) = per_room_rules.get(&placed.space_id) {
+                    for rule in atmo_rules {
+                        let is_blocking = feature_registry.is_blocking(&rule.feature_type);
+                        let room_reserved = interior
+                            .map(|ip| &ip.reserved_paths)
+                            .unwrap_or(&empty_reserved);
+
+                        // Skip blocking features targeted at clear zones.
+                        if is_blocking && would_violate_clear_zone(rule, &clear_zones) {
+                            continue;
+                        }
+
+                        let placed_count = place_rule(
+                            rule,
+                            placed.space_id,
+                            rect,
+                            tiles,
+                            &mut room_occupied,
+                            &feature_registry,
+                            room_reserved,
+                            &mut features,
+                            rng,
+                        )?;
+
+                        if placed_count > 0 {
+                            debug!(
+                                space_id = ?placed.space_id,
+                                feature_type = %rule.feature_type,
+                                count = placed_count,
+                                "placed atmosphere features (template room)"
+                            );
+                        }
+                    }
+                }
+            } else {
+                // No template matched — use generic rule-based placement.
+                let matched = matching_rules(rules, spec);
+
+                // Also include per-room atmosphere rules for this space.
+                let atmosphere_rules = per_room_rules.get(&placed.space_id);
+                let all_matched: Vec<&FeatureRule> = matched
+                    .into_iter()
+                    .chain(
+                        atmosphere_rules
+                            .map(|v| v.iter().collect::<Vec<_>>())
+                            .unwrap_or_default(),
+                    )
+                    .collect();
+
+                if all_matched.is_empty() {
                     debug!(
                         space_id = ?placed.space_id,
-                        feature_type = %rule.feature_type,
-                        count = placed_count,
-                        "placed features"
+                        label = ?placed.label,
+                        "no feature rules matched"
                     );
+                    global_occupied = room_occupied;
+                    continue;
+                }
+
+                debug!(
+                    space_id = ?placed.space_id,
+                    label = ?placed.label,
+                    rule_count = all_matched.len(),
+                    "matched feature rules"
+                );
+
+                for rule in &all_matched {
+                    let room_reserved = interior_map
+                        .get(&placed.space_id)
+                        .map(|ip| &ip.reserved_paths)
+                        .unwrap_or(&empty_reserved);
+                    let placed_count = place_rule(
+                        rule,
+                        placed.space_id,
+                        rect,
+                        tiles,
+                        &mut room_occupied,
+                        &feature_registry,
+                        room_reserved,
+                        &mut features,
+                        rng,
+                    )?;
+
+                    if placed_count > 0 {
+                        debug!(
+                            space_id = ?placed.space_id,
+                            feature_type = %rule.feature_type,
+                            count = placed_count,
+                            "placed features"
+                        );
+                    }
                 }
             }
 
             // Merge room placements into global set.
             global_occupied = room_occupied;
-            global_blocking = room_blocking;
         }
 
         info!(total_features = features.len(), "feature planning complete");
@@ -157,42 +266,35 @@ impl FeaturePlanner for SimpleFeaturePlanner {
 /// Returns the number of features actually placed. If the rule is `required`
 /// and no candidate position could be found, returns an error.
 ///
-/// After each placement, verifies that all doors in the room remain mutually
-/// reachable via BFS (treating blocking cells as impassable). If a placement
-/// would disconnect a door, it is undone and the rule stops trying.
+/// Blocking features are excluded from reserved door-to-door path cells
+/// (via the `reserved` set passed to `pick_candidate`), guaranteeing that
+/// traversal between doors is never obstructed.
 fn place_rule(
     rule: &FeatureRule,
     space_id: SpaceId,
     rect: crate::geometry::geom::Rect,
     tiles: &TileMap,
-    all_doors: &[crate::geometry::geom::Point],
     occupied: &mut HashSet<crate::geometry::geom::Point>,
-    blocking: &mut HashSet<crate::geometry::geom::Point>,
     feature_registry: &crate::feature::registry::FeatureRegistry,
+    reserved: &HashSet<crate::geometry::geom::Point>,
     features: &mut Vec<FeaturePlacement>,
     rng: &mut dyn rand::RngCore,
 ) -> Result<u32, FeaturePlanError> {
     let mut placed = 0u32;
     let is_blocking = feature_registry.is_blocking(&rule.feature_type);
+    let empty_excluded: HashSet<crate::geometry::geom::Point> = HashSet::new();
 
     for _ in 0..rule.max_count {
-        let candidate = pick_candidate(&rule.strategy, tiles, rect, occupied, rng);
+        let excluded = if is_blocking {
+            reserved
+        } else {
+            &empty_excluded
+        };
+        let candidate = pick_candidate(&rule.strategy, tiles, rect, occupied, excluded, rng);
 
         match candidate {
             Some(point) => {
-                // Tentatively place.
                 occupied.insert(point);
-
-                // Only check door reachability for blocking features.
-                if is_blocking {
-                    blocking.insert(point);
-                    if !doors_reachable(tiles, all_doors, blocking) {
-                        // Undo — this placement would disconnect a door.
-                        occupied.remove(&point);
-                        blocking.remove(&point);
-                        break;
-                    }
-                }
 
                 features.push(FeaturePlacement {
                     feature_type: rule.feature_type.clone(),
@@ -216,68 +318,6 @@ fn place_rule(
     Ok(placed)
 }
 
-/// Find all door and locked-door positions on the map.
-///
-/// Called once at the start of feature planning to avoid re-scanning
-/// the entire tile map on every connectivity check.
-fn find_all_doors(tiles: &TileMap) -> Vec<crate::geometry::geom::Point> {
-    let mut doors = Vec::new();
-    for y in 0..tiles.height as i32 {
-        for x in 0..tiles.width as i32 {
-            if let Some(tile) = tiles.get(x, y)
-                && (tile == Tile::DOOR || tile == Tile::LOCKED_DOOR)
-            {
-                doors.push(crate::geometry::geom::Point { x, y });
-            }
-        }
-    }
-    doors
-}
-
-/// Check that all doors on the map are mutually reachable via BFS,
-/// treating `blocking` cells as impassable.
-///
-/// Uses a pre-computed door list to avoid re-scanning the map each call.
-/// Returns `true` if all doors can reach each other (or if 0–1 doors exist).
-fn doors_reachable(
-    tiles: &TileMap,
-    doors: &[crate::geometry::geom::Point],
-    blocking: &HashSet<crate::geometry::geom::Point>,
-) -> bool {
-    use std::collections::VecDeque;
-
-    if doors.len() < 2 {
-        return true;
-    }
-
-    // BFS from the first door, treating blocking cells as impassable.
-    let start = doors[0];
-    let mut visited = HashSet::new();
-    let mut queue = VecDeque::new();
-    visited.insert(start);
-    queue.push_back(start);
-
-    while let Some(pos) = queue.pop_front() {
-        for neighbor in pos.cardinals() {
-            if visited.contains(&neighbor) {
-                continue;
-            }
-            if blocking.contains(&neighbor) {
-                continue;
-            }
-            if let Some(tile) = tiles.get(neighbor.x, neighbor.y)
-                && tile.is_walkable()
-            {
-                visited.insert(neighbor);
-                queue.push_back(neighbor);
-            }
-        }
-    }
-
-    // All other doors must be reachable.
-    doors.iter().skip(1).all(|d| visited.contains(d))
-}
-
 /// Pick a single candidate point using the given strategy.
 ///
 /// For strategies that return multiple candidates (`WallAdjacent`, `Corner`,
@@ -288,22 +328,25 @@ fn pick_candidate(
     tiles: &TileMap,
     rect: crate::geometry::geom::Rect,
     occupied: &HashSet<crate::geometry::geom::Point>,
+    excluded: &HashSet<crate::geometry::geom::Point>,
     rng: &mut dyn rand::RngCore,
 ) -> Option<crate::geometry::geom::Point> {
+    let combined_excluded: HashSet<crate::geometry::geom::Point> =
+        occupied.union(excluded).copied().collect();
     match strategy {
-        PlacementStrategy::Center => find_center_tile(tiles, rect, occupied),
+        PlacementStrategy::Center => find_center_tile(tiles, rect, &combined_excluded),
         PlacementStrategy::WallAdjacent => {
-            let mut candidates = find_wall_adjacent_tiles(tiles, rect, occupied);
+            let mut candidates = find_wall_adjacent_tiles(tiles, rect, &combined_excluded);
             candidates.shuffle(rng);
             pick_furthest_from_occupied(candidates, occupied)
         }
         PlacementStrategy::Corner => {
-            let mut candidates = find_corner_tiles(tiles, rect, occupied);
+            let mut candidates = find_corner_tiles(tiles, rect, &combined_excluded);
             candidates.shuffle(rng);
             pick_furthest_from_occupied(candidates, occupied)
         }
         PlacementStrategy::RandomFloor => {
-            let mut candidates = find_floor_tiles(tiles, rect, occupied);
+            let mut candidates = find_floor_tiles(tiles, rect, &combined_excluded);
             candidates.shuffle(rng);
             pick_furthest_from_occupied(candidates, occupied)
         }
@@ -336,6 +379,95 @@ fn pick_furthest_from_occupied(
             })
             .min()
             .unwrap_or(i32::MAX)
+    })
+}
+
+// ─── Zone-aware placement helpers ───────────────────────────────────────────
+
+/// Place features within a specific zone using the `InteriorPlan`'s zone cells.
+///
+/// Falls back to the generic placement strategy if the zone has no available
+/// cells (e.g., in a very small room where the zone might not exist).
+fn place_in_zone(
+    feature_type: &crate::feature::registry::FeatureType,
+    max_count: u32,
+    zone: ZoneKind,
+    space_id: SpaceId,
+    interior: Option<&&InteriorPlan>,
+    tiles: &TileMap,
+    rect: crate::geometry::geom::Rect,
+    occupied: &mut HashSet<crate::geometry::geom::Point>,
+    features: &mut Vec<FeaturePlacement>,
+    rng: &mut dyn rand::RngCore,
+) -> u32 {
+    let mut placed = 0u32;
+
+    for _ in 0..max_count {
+        let candidate = if let Some(ip) = interior {
+            // Get available zone cells.
+            let mut candidates = ip.available_zone_cells(zone, occupied);
+            // Also exclude door-adjacent tiles.
+            candidates.retain(|p| !is_door_adjacent_point(tiles, *p));
+            if candidates.is_empty() {
+                // Fallback: try generic strategy based on zone kind.
+                let strategy = zone_to_strategy(zone);
+                pick_candidate(&strategy, tiles, rect, occupied, &ip.reserved_paths, rng)
+            } else {
+                candidates.shuffle(rng);
+                pick_furthest_from_occupied(candidates, occupied)
+            }
+        } else {
+            // No interior plan — fall back to strategy.
+            let strategy = zone_to_strategy(zone);
+            pick_candidate(&strategy, tiles, rect, occupied, &HashSet::new(), rng)
+        };
+
+        match candidate {
+            Some(point) => {
+                occupied.insert(point);
+                features.push(FeaturePlacement {
+                    feature_type: feature_type.clone(),
+                    anchor: point,
+                    cells: vec![point],
+                    space_id,
+                    tags: vec![],
+                });
+                placed += 1;
+            }
+            None => break,
+        }
+    }
+
+    placed
+}
+
+/// Map a zone kind to a fallback placement strategy.
+fn zone_to_strategy(zone: ZoneKind) -> PlacementStrategy {
+    match zone {
+        ZoneKind::Center => PlacementStrategy::Center,
+        ZoneKind::WallBand => PlacementStrategy::WallAdjacent,
+        ZoneKind::Corner => PlacementStrategy::Corner,
+        ZoneKind::Open | ZoneKind::DoorPath => PlacementStrategy::RandomFloor,
+    }
+}
+
+/// Check if a feature rule's placement strategy targets a zone that is marked Clear.
+fn would_violate_clear_zone(rule: &FeatureRule, clear_zones: &HashSet<ZoneKind>) -> bool {
+    let target_zone = match rule.strategy {
+        PlacementStrategy::Center => ZoneKind::Center,
+        PlacementStrategy::WallAdjacent => ZoneKind::WallBand,
+        PlacementStrategy::Corner => ZoneKind::Corner,
+        PlacementStrategy::RandomFloor => return false, // could land anywhere, don't block
+    };
+    clear_zones.contains(&target_zone)
+}
+
+/// Returns true if any cardinal neighbor of `p` is a Door or LockedDoor.
+fn is_door_adjacent_point(map: &TileMap, p: crate::geometry::geom::Point) -> bool {
+    use crate::tile::registry::Tile;
+    p.cardinals().iter().any(|n| {
+        let t = map.get(n.x, n.y);
+        t == Some(Tile::DOOR) || t == Some(Tile::LOCKED_DOOR)
     })
 }
 
@@ -454,6 +586,8 @@ mod tests {
                 &tiles,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -493,6 +627,8 @@ mod tests {
                 &tiles,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -532,6 +668,8 @@ mod tests {
                 &tiles,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -621,6 +759,8 @@ mod tests {
             &map,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
+            &[],
             &mut rng,
         );
         // The first room claims the only floor tile for the sarcophagus.
@@ -658,6 +798,8 @@ mod tests {
                 &tiles,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
+                &[],
                 &mut rng,
             )
             .unwrap();

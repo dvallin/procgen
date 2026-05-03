@@ -15,6 +15,7 @@ use crate::feature::registry::{FeatureProperties, FeatureRegistry};
 use crate::feature::rules::FeatureRule;
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::vocabulary::ThemeVocabulary;
+use crate::interior::template::InteriorTemplate;
 use crate::tile::registry::{TileProperties, TileRegistry};
 
 // ─── Embedded defaults (compiled into the binary) ───────────────────────────
@@ -39,6 +40,10 @@ const EMBEDDED_FEATURE_REGISTRY: &str = include_str!("../../assets/rules/feature
 
 /// Default atmosphere profiles, embedded at compile time.
 const EMBEDDED_ATMOSPHERE_PROFILES: &str = include_str!("../../assets/rules/atmospheres.json");
+
+/// Default interior templates, embedded at compile time.
+const EMBEDDED_INTERIOR_TEMPLATES: &str =
+    include_str!("../../assets/rules/interior_templates.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -245,6 +250,17 @@ pub fn load_default_atmosphere_profiles() -> Result<Vec<AtmosphereProfile>, Asse
         DEFAULT_ATMOSPHERE_PROFILES_PATH,
         EMBEDDED_ATMOSPHERE_PROFILES,
     )
+}
+
+/// Default file path for interior templates, relative to the working directory.
+pub const DEFAULT_INTERIOR_TEMPLATES_PATH: &str = "assets/rules/interior_templates.json";
+
+/// Load the default interior templates.
+///
+/// Tries `assets/rules/interior_templates.json` on disk first, falls back to
+/// the compiled-in version if the file doesn't exist.
+pub fn load_default_interior_templates() -> Result<Vec<InteriorTemplate>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_INTERIOR_TEMPLATES_PATH, EMBEDDED_INTERIOR_TEMPLATES)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────

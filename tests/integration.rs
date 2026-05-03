@@ -477,6 +477,8 @@ fn run_crypt_features() -> (
             &map,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
+            &[],
             &mut rng,
         )
         .unwrap();
@@ -507,6 +509,8 @@ fn run_tavern_features() -> (
             &map,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
+            &[],
             &mut rng,
         )
         .unwrap();
@@ -1324,6 +1328,7 @@ fn pipeline_with_custom_feature_rules_override() {
         seed: Some(42),
         feature_rules: Some(custom_rules),
         atmosphere_profiles: Some(vec![]),
+        interior_templates: Some(vec![]),
         ..PipelineConfig::default()
     };
     let pipeline = Pipeline { config };

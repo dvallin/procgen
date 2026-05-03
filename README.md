@@ -12,7 +12,7 @@ cargo run -- tavern           # Generate a Tavern Cellar
 cargo run -- cave             # Generate a Natural Cave
 cargo run -- cave --seed 42   # Deterministic output with fixed seed
 cargo run -- --trace          # Show pipeline stages (to stderr)
-cargo test                    # Run all 309 tests
+cargo test                    # Run all 349 tests
 ```
 
 ### Example Output (cave, seed 3)
@@ -94,10 +94,13 @@ SpatialPlan
 GeometryPlan
     │  "Where exactly does each room sit in 2D space?"
     ▼
-TileMap (+scatter)
+TileMap + Atmosphere Scatter
     │  "What is the ground made of?"
     ▼
-FeaturePlan
+InteriorPlan
+    │  "What spatial zones exist in each room?"
+    ▼
+FeaturePlan (templates + rules + atmosphere)
     │  "What objects sit on the ground?"
     ▼
 EntityPlan
@@ -118,11 +121,16 @@ ASCII Output
 
 **4. GeometryPlan** — Concrete 2D placement. Rooms get pixel-level positions via BFS layout. Corridors are routed between rooms using Z-shape routing with door placement.
 
-**5. TileMap (+scatter)** — The actual ground. Rooms are carved as floor tiles, walls are inferred from floor adjacency, doors placed at corridor endpoints. Then **tile scatter rules** replace some floor tiles with terrain variants (grass in natural rooms, rubble in collapsed rooms, water in flooded rooms).
+**5. TileMap + Atmosphere Scatter** — The actual ground. Rooms are carved as floor tiles, walls are inferred from floor adjacency, doors placed at corridor endpoints. Then tile scatter (from data-driven rules AND atmosphere profiles) replaces floor tiles with terrain variants — grass in overgrown rooms, rubble in collapsed rooms, water in flooded rooms. Non-walkable scatter is connectivity-safe.
 
-**6. FeaturePlan** — Objects placed on tiles. Chests, altars, barrels, torches, moss, stalagmites — driven by rules that match on room role, archetype, and tags.
+**6. InteriorPlan** — Each room is spatially analyzed into zones (Center, WallBand, Corner, DoorPath, Open) and reserved door-to-door paths are computed. This structural analysis is consumed by downstream planners.
 
-**7. EntityPlan** — Creatures placed in rooms. Skeletons, rats, guardians — driven by rules matching on roles and tags. Entry rooms are kept safe.
+**7. FeaturePlan** — Objects placed on tiles. Three systems feed into feature placement, in priority order:
+1. **Interior templates** — zone-aware structural placement (altar at center, torches on walls)
+2. **Feature rules** — role/archetype/tag matching (chest in Reward rooms)
+3. **Atmosphere contributions** — sampled from matched profiles (moss, vines, crystals)
+
+**8. EntityPlan** — Creatures placed in rooms. Skeletons, rats, guardians — driven by rules matching on roles and tags, plus atmosphere contributions. Entry rooms are kept safe.
 
 ---
 
@@ -130,7 +138,26 @@ ASCII Output
 
 All content is defined in JSON files under `assets/`. The binary embeds these as fallback defaults — if a file exists on disk it's used instead, allowing runtime customization without recompilation.
 
-### Narrative Patterns (`assets/patterns/narrative.json`)
+The assets are organized into **four distinct layers**, each with a different job:
+
+| Layer | Files | Purpose |
+|-------|-------|---------|
+| **Structure** | `patterns/`, `vocabularies/` | *What rooms exist* and what they're called |
+| **Ground** | `rules/tiles.json`, `rules/tile_scatter.json` | *What the floor IS* (the tile itself) |
+| **Atmosphere** | `rules/atmospheres.json` | *Mood-driven influences* sampled from room tags |
+| **Furnishing** | `rules/features.json`, `rules/entities.json`, `rules/interior_templates.json` | *What sits ON the ground* |
+
+Understanding which layer something belongs to is critical:
+- **Tiles ARE the ground.** Water, rubble, grass — these are the floor itself. They affect pathfinding.
+- **Features are objects ON tiles.** Moss, chests, altars — they occupy a floor cell but don't change the tile.
+- **Atmosphere profiles don't place anything directly.** They *sample* influences (scatter rules, feature rules, entity rules) that feed into the existing planners.
+- **Interior templates don't replace feature rules.** They provide *zone-aware structural guidance* for the feature planner — "put the altar in the center zone" rather than "put it on a random floor tile."
+
+---
+
+### Structure Layer
+
+#### Narrative Patterns (`assets/patterns/narrative.json`)
 
 Define the structural skeleton of a dungeon. Each pattern specifies:
 - **Slots** — rooms with roles (Entry, Hub, Gate, Goal, Reward, Branch)
@@ -159,7 +186,7 @@ Define the structural skeleton of a dungeon. Each pattern specifies:
 }
 ```
 
-### Theme Vocabularies (`assets/vocabularies/themes.json`)
+#### Theme Vocabularies (`assets/vocabularies/themes.json`)
 
 Map structural roles to themed room labels, tags, and archetypes. Each vocabulary provides entries for every `NodeRole`:
 
@@ -181,9 +208,13 @@ Map structural roles to themed room labels, tags, and archetypes. Each vocabular
 }
 ```
 
-The tags assigned here (`"vast"`, `"overgrown"`, `"flooded"`) drive both tile scatter and feature placement downstream.
+The tags assigned here (`"vast"`, `"overgrown"`, `"flooded"`) are classified into **structural tags** (gameplay triggers like `"main_goal"`, `"locked"`) and **atmosphere tags** (flavor like `"damp"`, `"overgrown"`). This classification drives all downstream systems.
 
-### Tile Registry (`assets/rules/tiles.json`)
+---
+
+### Ground Layer
+
+#### Tile Registry (`assets/rules/tiles.json`)
 
 Defines the tile types available in the world. Each tile has properties that determine rendering and pathfinding:
 
@@ -195,7 +226,7 @@ Defines the tile types available in the world. Each tile has properties that det
 
 Adding a new tile type (e.g. "lava") requires only a JSON entry here — no Rust code changes.
 
-### Tile Scatter Rules (`assets/rules/tile_scatter.json`)
+#### Tile Scatter Rules (`assets/rules/tile_scatter.json`)
 
 Replace floor tiles with terrain variants based on room tags. Applied during rasterization after rooms are carved:
 
@@ -211,70 +242,189 @@ Replace floor tiles with terrain variants based on room tags. Applied during ras
 
 Non-walkable scatter (water, pit) is **connectivity-safe** — tiles are only placed where all cardinal neighbors remain walkable, preventing rooms from becoming disconnected.
 
-### Feature Rules (`assets/rules/features.json`)
+---
 
-Place objects on tiles based on room properties:
+### Atmosphere Layer
+
+#### Atmosphere Profiles (`assets/rules/atmospheres.json`)
+
+Atmosphere profiles provide **mood-driven influences** that are *sampled* based on a room's atmosphere tags. Unlike feature/entity rules (which fire deterministically when criteria match), atmosphere profiles are probabilistic — the system draws from a weighted palette.
+
+Each profile bundles scatter, feature, and entity influences:
 
 ```json
-{ "kind": "Sarcophagus", "strategy": "Center", "required": true, "max_count": 1,
+{
+  "name": "damp",
+  "match_tags": ["damp", "flooded"],
+  "priority": 0,
+  "scatter": [
+    { "target_tile": "water", "density": 0.15, "weight": 3.0 }
+  ],
+  "features": [
+    { "feature_type": "moss", "strategy": "RandomFloor", "max_count": 3, "weight": 5.0 },
+    { "feature_type": "fungus", "strategy": "Corner", "max_count": 2, "weight": 1.5 }
+  ],
+  "entities": [
+    { "archetype": "rat", "placement": "RandomFloor", "max_count": 2, "weight": 2.0 }
+  ]
+}
+```
+
+**How it works:** For each room, all profiles whose `match_tags` overlap the room's atmosphere tags are merged into a palette. Scatter influences are applied deterministically (they ARE the ground). Feature and entity influences are sampled via weighted random draws (controlled by `atmosphere_sample_budget` in config, default 3). The sampled results are converted into standard `FeatureRule`/`EntityRule` entries and merged with the other rule sources.
+
+**Key insight:** Atmosphere scatter changes the *tile itself* (ground layer), while atmosphere features/entities produce rules for the *furnishing layer*. A "damp" profile can simultaneously make the floor watery AND sprinkle moss on remaining floor tiles.
+
+---
+
+### Furnishing Layer
+
+#### Interior Templates (`assets/rules/interior_templates.json`)
+
+Interior templates provide **zone-aware structural placement** for rooms that match specific criteria. They sit at the highest priority in feature placement — when a template matches a room, its directives guide where features go using the room's spatial zones.
+
+```json
+{
+  "name": "crypt_vault",
+  "match_role": "Goal",
+  "match_archetype": "Vault",
+  "match_tag": "main_goal",
+  "directives": [
+    { "zone": "Center", "action": { "Place": { "feature_type": "sarcophagus", "max_count": 1 } } },
+    { "zone": "WallBand", "action": { "Place": { "feature_type": "torch", "max_count": 2 } } },
+    { "zone": "DoorPath", "action": "Clear" }
+  ],
+  "priority": 10
+}
+```
+
+**Zones** are computed from the room's geometry:
+- `Center` — the geometric center area
+- `WallBand` — cells adjacent to walls
+- `Corner` — cells near two perpendicular walls
+- `DoorPath` — reserved door-to-door traversal paths (must stay unblocked)
+- `Open` — remaining floor cells
+
+**Actions:**
+- `Place { feature_type, max_count }` — place this feature using zone cells as candidates
+- `Clear` — no blocking features may be placed in this zone (atmosphere rules respect this too)
+
+**Templates vs. feature rules:** Templates say *where in the room* something goes (spatial constraint). Feature rules say *what goes in which rooms* (matching constraint). A room can have a template AND still receive atmosphere-contributed features — but atmosphere features respect the template's `Clear` directives.
+
+#### Feature Rules (`assets/rules/features.json`)
+
+Place objects on tiles based on room properties. These are the baseline rules — they fire for rooms that don't match any template (or supplement template rooms for roles/tags not covered by the template):
+
+```json
+{ "feature_type": "sarcophagus", "strategy": "Center", "required": true, "max_count": 1,
   "match_archetype": "Vault", "match_tag": "main_goal" }
-{ "kind": {"Decoration": "moss"}, "strategy": "RandomFloor", "required": false, "max_count": 3,
-  "match_tag": "overgrown" }
+{ "feature_type": "table", "strategy": "Center", "required": false, "max_count": 1,
+  "match_role": "Hub" }
+{ "feature_type": "chest", "strategy": "Center", "required": true, "max_count": 1,
+  "match_role": "Reward" }
 ```
 
 - `strategy` — where to place: `Center`, `WallAdjacent`, `Corner`, `RandomFloor`
 - `required` — if true, pipeline errors when placement fails
 - `match_role` / `match_archetype` / `match_tag` — all specified criteria are ANDed
 
-### Entity Rules (`assets/rules/entities.json`)
+#### Feature Type Registry (`assets/rules/feature_types.json`)
+
+Defines properties for every feature type name referenced by rules and templates:
+
+```json
+{ "name": "altar", "category": "Interactable", "ascii_char": "†", "blocking": true, "tags": ["religious"] }
+{ "name": "torch", "category": "Decoration", "ascii_char": "!", "blocking": false, "tags": ["light"] }
+{ "name": "chest", "category": "Container", "ascii_char": "$", "blocking": true, "tags": ["loot"] }
+```
+
+New feature types can be added with zero Rust code changes — just a JSON entry here plus rules/templates that reference it.
+
+#### Entity Rules (`assets/rules/entities.json`)
 
 Place creatures and NPCs:
 
 ```json
-{ "archetype": "skeleton", "strategy": "RandomFloor", "max_count": 2,
-  "match_role": "Hub", "match_tag": null }
-{ "archetype": "gate_guardian", "strategy": "NearDoor", "max_count": 2,
-  "match_role": "Gate", "match_tag": "locked" }
+{ "archetype": "skeleton", "placement": "RandomFloor", "max_count": 2,
+  "role_match": "Hub", "tag_match": null }
+{ "archetype": "skeleton_guardian", "placement": { "NearFeature": "sarcophagus" }, "max_count": 2,
+  "role_match": "Gate", "tag_match": "locked" }
 ```
 
 ---
 
-## How Assets Stack Together
+## How the Layers Compose
 
-Here's how a single room flows through the asset layers:
-
-```text
-Theme vocabulary says:
-    Hub → "Grand Cavern", tags: ["vast", "echoing"], archetype: Hall
-
-Tile scatter rules see tag "vast":
-    (no scatter rule matches "vast" — floor stays as-is)
-
-Feature rules see tag "vast" + role Hub:
-    → place stalagmites (max 2, RandomFloor)
-    → place table (max 1, Center)
-    → place barrels (max 2, WallAdjacent)
-
-Entity rules see role Hub:
-    → place skeletons (max 2, RandomFloor)
-```
-
-Another example with terrain:
+Here's how a single room flows through all asset layers, showing the separation of concerns:
 
 ```text
-Theme vocabulary says:
-    Goal → "Underground Lake", tags: ["main_goal", "flooded"], archetype: Vault
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STRUCTURE LAYER: "What is this room?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Tile scatter rules see tag "flooded":
-    → replace 15% of floor tiles with Water (non-walkable, connectivity-safe)
+  Theme vocabulary assigns:
+    Role=Goal, Archetype=Vault, Label="Sealed Tomb"
+    structural_tags: ["main_goal", "locked"]
+    atmosphere_tags: ["noble", "sealed"]
 
-Feature rules see tag "main_goal" + archetype Vault:
-    → place sarcophagus (required, Center)
-    → place torches (max 2, WallAdjacent)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GROUND LAYER: "What is the floor made of?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Entity rules see role Goal:
-    → place guardians (max 2, NearDoor)
+  Tile scatter rules: no scatter rules match "noble" or "sealed"
+    → floor stays as plain Floor tiles
+
+  Atmosphere profile "noble_sealed" scatter: (none defined)
+    → no scatter from atmosphere either
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INTERIOR ANALYSIS: "What are the spatial zones?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Zone classification produces:
+    Center: 4 cells around room midpoint
+    WallBand: 12 cells adjacent to walls
+    Corner: 8 cells near wall intersections
+    DoorPath: 5 cells on the door-to-door route
+    Open: 6 remaining cells
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FURNISHING LAYER: "What objects go where?"
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1. Interior template "crypt_vault" matches (Goal + Vault + main_goal):
+     → sarcophagus in Center zone (1)
+     → torches in WallBand zone (2)
+     → DoorPath zone marked Clear (no blocking features)
+
+  2. Atmosphere profile "noble_sealed" samples features:
+     → banner on WallAdjacent (weight 3.0, sampled)
+     → tapestry on WallAdjacent (weight 2.0, not sampled this run)
+     (respects template's Clear directive on DoorPath)
+
+  3. Atmosphere profile "noble_sealed" samples entities:
+     → skeleton_guardian at Center (weight 2.0, sampled)
 ```
+
+Another example showing the ground/furnishing distinction:
+
+```text
+  Room: "Fungal Garden", Role=Hub, tags: ["overgrown", "luminous"]
+
+  GROUND: Scatter rule fires for "overgrown"
+    → 25% of floor tiles BECOME Grass (tile ID changes, affects pathfinding)
+
+  ATMOSPHERE: Profile "overgrown" fires
+    → scatter: Grass at 25% (already handled above, deduped)
+    → features sampled: vines (WallAdjacent), fungus (Corner)
+    → entities: (none in this profile)
+
+  FURNISHING: Template "hub_hall" matches (Hub + Hall)
+    → table in Center zone
+    → torches in WallBand zone
+    → atmosphere features (vines, fungus) placed around template features
+```
+
+**The critical distinction:** Grass tiles in the Fungal Garden are *the ground itself* — the tile changed from Floor to Grass. The vines feature sits *on top of* a remaining Floor tile. Both came from the "overgrown" tag, but through different mechanisms targeting different layers.
 
 ---
 
@@ -284,9 +434,23 @@ To add a new scenario you need:
 
 1. **A situation factory** (`src/demo/your_scenario.rs`) — returns a `SituationContext` with tags
 2. **A theme vocabulary** (entry in `assets/vocabularies/themes.json`) — maps roles to themed rooms
-3. Optionally: new entries in feature/entity rules or tile scatter for scenario-specific tags
+3. Optionally: new entries in feature/entity rules, atmosphere profiles, or interior templates for scenario-specific content
 
 The narrative pattern is selected automatically from your situation tags via weighted voting — you don't need a new pattern unless your dungeon has a fundamentally different structure.
+
+### Extending the Asset Layers
+
+| I want to... | Edit this file |
+|--------------|----------------|
+| Add a new tile type (lava, ice) | `rules/tiles.json` |
+| Make a tag scatter terrain | `rules/tile_scatter.json` |
+| Add a new feature type (bookshelf, brazier) | `rules/feature_types.json` |
+| Place a feature in specific rooms | `rules/features.json` |
+| Create a mood that influences rooms | `rules/atmospheres.json` |
+| Control feature layout in a room type | `rules/interior_templates.json` |
+| Add a new creature type | `rules/entities.json` |
+| Create a new dungeon topology | `patterns/narrative.json` |
+| Theme rooms with labels and tags | `vocabularies/themes.json` |
 
 ---
 
@@ -296,15 +460,15 @@ The narrative pattern is selected automatically from your situation tags via wei
 cargo run                          # Default scenario
 cargo run -- cave --seed 42        # Fixed seed for reproducibility
 cargo run -- --trace debug         # Pipeline trace with placement details
-cargo test                         # 309 tests (unit + property-based + integration)
+cargo test                         # 349 tests (unit + property-based + integration)
 ```
 
 ### Tracing Levels
 
 | Level | Shows |
 |-------|-------|
-| `--trace` (info) | Pipeline stage transitions, tile counts |
-| `--trace debug` | Room placement decisions, scatter counts, feature/entity details |
+| `--trace` (info) | Pipeline stage transitions, tile counts, atmosphere matching summary |
+| `--trace debug` | Room placement, scatter counts, template matching, zone details |
 | `--trace all` | Everything including corridor routing steps |
 
 ### Architecture

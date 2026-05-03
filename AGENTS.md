@@ -15,11 +15,14 @@ Working vertical slice with full pipeline, property-based tests, and integration
 - **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
 - **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties (walkable, opaque, ascii_char, tags), `TileMap` stores `Vec<TileId>`, backward-compat `Tile` namespace struct with named constants (`Tile::FLOOR`, etc.), JSON asset for tile definitions. Rasterizer accepts `&TileRegistry`. Extended palette (Water, Pit, Stairs, Rubble, Grass). ASCII renderer uses registry for tile characters (`render_ascii_full`). **Tile scatter rules** (`assets/rules/tile_scatter.json`) replace floor tiles with terrain variants at data-driven densities during rasterization — proper separation: tiles ARE the ground (water, rubble, grass), features are objects ON tiles (moss, stalagmites, fungus). Non-walkable scatter is connectivity-safe.
 - **Phase 4.1 — Feature Registry & FeatureCategory enum**: `FeatureType(String)` newtype replaces `FeatureKind` enum. `FeatureRegistry` maps type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for behavior dispatch. Feature rules reference type strings ("altar", "chest") instead of enum variants. New feature types added via `assets/rules/feature_types.json` without code changes.
+- **Phase 4.2 — Tag classification & atmosphere profiles**: `SpaceSpec` gains `structural_tags`, `atmosphere_tags`, `motifs` (replacing flat `tags`). `AtmosphereProfile` bundles weighted scatter/feature/entity influences keyed by tag match. `AtmospherePalette` merges active profiles; the planner samples from the palette. Profiles loaded from `assets/rules/atmospheres.json`.
+- **Phase 4.3 — Room zones & InteriorPlan**: `InteriorPlan` partitions each room into zones (`Center`, `WallBand`, `Corner`, `DoorPath`, `Open`). Reserved door-to-door paths computed once via BFS — scatter and feature planner both exclude reserved cells for non-walkable/blocking placements. `doors_reachable` BFS retained as safety-net. Pipeline: rasterize → reserve paths → scatter → build interiors → feature plan.
+- **Phase 4.4 — Template interiors (constraint-based)**: `InteriorTemplate` declarative data model: match rooms by role/archetype/tag, assign zone→feature directives (`Place { feature_type, max_count }` or `Clear`). Templates loaded from `assets/rules/interior_templates.json` (6 starters: crypt_vault, sacred_chamber, storage_room, treasure_room, hub_hall, guard_post). Feature planner uses zone cells from `InteriorPlan` for template-matched rooms; `Clear` directives prevent blocking features in those zones. Atmosphere rules still apply after template placement (respecting clear zones). Templates configurable via `PipelineConfig.interior_templates`.
 
 ## Pipeline (current)
 
 ```
-SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap (+scatter) → FeaturePlan → EntityPlan → ASCII
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap → reserve paths → scatter → InteriorPlan → FeaturePlan → EntityPlan → ASCII
 ```
 
 Each stage is behind a trait (`IntentBuilder`, `SpatialPlanner`, `GeometryPlanner`, `Rasterizer`, `FeaturePlanner`, `EntityPlanner`) with a simple default implementation. The `Pipeline` struct orchestrates all stages with retry semantics and seeded RNG.
@@ -61,8 +64,14 @@ src/
 │   ├── registry.rs      # TileId newtype, Tile constants, TileProperties, TileRegistry
 │   ├── map.rs           # TileMap (stores Vec<TileId>), flood_fill
 │   ├── rasterize.rs     # GeometryPlan → TileMap (trait + impl + proptest)
-│   ├── scatter.rs       # TileScatterRule, apply_scatter (tag→tile replacement with density)
+│   ├── scatter.rs       # TileScatterRule, apply_scatter (tag→tile replacement with density, reserved-path aware)
 │   └── ascii.rs         # TileMap → String debug rendering (+ feature + entity overlay)
+├── interior/            # Room interior planning (zones + reserved paths)
+│   ├── plan.rs          # InteriorPlan, Zone, ZoneKind, PathIntent
+│   ├── paths.rs         # find_room_doors, compute_reserved_paths (per-room BFS)
+│   ├── zones.rs         # classify_zones (Center, WallBand, Corner, DoorPath, Open)
+│   ├── builder.rs       # build_interior_plans: GeometryPlan + TileMap → Vec<InteriorPlan>
+│   └── template.rs      # InteriorTemplate, ZoneDirective, ZoneAction, match_template
 ├── feature/             # Feature placement
 │   ├── registry.rs      # FeatureType newtype, FeatureCategory enum, FeatureProperties, FeatureRegistry
 │   ├── plan.rs          # FeaturePlan, FeaturePlacement, Feature constants, FeaturePlanError
@@ -91,7 +100,8 @@ assets/
     ├── feature_types.json # Feature type registry (name→category+char+blocking+tags)
     ├── entities.json    # Default entity rules (serde JSON, embedded fallback)
     ├── tiles.json       # Default tile registry (serde JSON, embedded fallback)
-    └── tile_scatter.json # Tile scatter rules (tag→tile density, embedded fallback)
+    ├── tile_scatter.json # Tile scatter rules (tag→tile density, embedded fallback)
+    └── interior_templates.json # Interior templates (zone→feature directives, embedded fallback)
 
 tests/
 ├── integration.rs       # End-to-end pipeline tests (connectivity, overlaps, etc.)
@@ -139,7 +149,7 @@ cargo run -- --trace debug         # DEBUG-level (placement details, routing dec
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (315 currently: 234 unit/proptest + 23 regression + 54 integration + 4 doctests)
+cargo test       # Runs all tests (349 currently: 268 unit/proptest + 23 regression + 54 integration + 4 doctests)
 ```
 
 ## Target Architecture

@@ -4,12 +4,14 @@
 //! (fraction of floor tiles to replace). Scatter rules are produced by the
 //! atmosphere system or constructed programmatically.
 
+use std::collections::{HashMap, HashSet};
+
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::geometry::geom::{GeometryPlan, Point};
-use crate::spatial::plan::SpatialPlan;
+use crate::spatial::plan::{SpaceId, SpatialPlan};
 use crate::tag::Tag;
 use crate::tile::map::TileMap;
 use crate::tile::registry::{Tile, TileId, TileRegistry};
@@ -55,6 +57,7 @@ pub fn apply_scatter(
     rules: &[TileScatterRule],
     registry: &TileRegistry,
     rng: &mut impl Rng,
+    reserved_per_room: &HashMap<SpaceId, HashSet<Point>>,
 ) {
     for placed in &geometry.spaces {
         // Find the corresponding SpaceSpec in the spatial plan.
@@ -71,6 +74,11 @@ pub fn apply_scatter(
         if matching.is_empty() {
             continue;
         }
+
+        let empty_reserved = HashSet::new();
+        let reserved = reserved_per_room
+            .get(&placed.space_id)
+            .unwrap_or(&empty_reserved);
 
         // Iterate the interior of the room's rect (skip walls on the border).
         let rect = placed.rect;
@@ -98,6 +106,10 @@ pub fn apply_scatter(
                         continue;
                     }
                     if rng.r#gen::<f64>() >= rule.density {
+                        continue;
+                    }
+                    // Never place non-walkable scatter on reserved door paths.
+                    if !target_walkable && reserved.contains(&Point { x, y }) {
                         continue;
                     }
                     // For non-walkable target tiles, only scatter where all 4
@@ -141,6 +153,7 @@ pub fn scatter_room(
     rules: &[TileScatterRule],
     registry: &TileRegistry,
     rng: &mut impl Rng,
+    reserved: &HashSet<Point>,
 ) {
     let x_start = rect.x + 1;
     let x_end = rect.x + rect.w - 1;
@@ -164,6 +177,10 @@ pub fn scatter_room(
                     continue;
                 }
                 if rng.r#gen::<f64>() >= rule.density {
+                    continue;
+                }
+                // Never place non-walkable scatter on reserved door paths.
+                if !target_walkable && reserved.contains(&Point { x, y }) {
                     continue;
                 }
                 if !target_walkable {
@@ -283,7 +300,15 @@ mod tests {
         }];
 
         let mut rng = StdRng::seed_from_u64(42);
-        apply_scatter(&mut map, &geometry, &spatial, &rules, &registry, &mut rng);
+        apply_scatter(
+            &mut map,
+            &geometry,
+            &spatial,
+            &rules,
+            &registry,
+            &mut rng,
+            &HashMap::new(),
+        );
 
         // The interior is 3×3 = 9 tiles. With density 0.5 we expect some to be water.
         let mut water_count = 0;
@@ -319,7 +344,15 @@ mod tests {
         }];
 
         let mut rng = StdRng::seed_from_u64(0);
-        apply_scatter(&mut map, &geometry, &spatial, &rules, &registry, &mut rng);
+        apply_scatter(
+            &mut map,
+            &geometry,
+            &spatial,
+            &rules,
+            &registry,
+            &mut rng,
+            &HashMap::new(),
+        );
 
         // Walls on border should be untouched.
         for x in 0..5 {
@@ -345,7 +378,15 @@ mod tests {
         }];
 
         let mut rng = StdRng::seed_from_u64(0);
-        apply_scatter(&mut map, &geometry, &spatial, &rules, &registry, &mut rng);
+        apply_scatter(
+            &mut map,
+            &geometry,
+            &spatial,
+            &rules,
+            &registry,
+            &mut rng,
+            &HashMap::new(),
+        );
 
         // All interior tiles should still be floor.
         for y in 1..4 {
@@ -368,7 +409,15 @@ mod tests {
         }];
 
         let mut rng = StdRng::seed_from_u64(0);
-        apply_scatter(&mut map, &geometry, &spatial, &rules, &registry, &mut rng);
+        apply_scatter(
+            &mut map,
+            &geometry,
+            &spatial,
+            &rules,
+            &registry,
+            &mut rng,
+            &HashMap::new(),
+        );
 
         for y in 1..4 {
             for x in 1..4 {
@@ -390,7 +439,15 @@ mod tests {
         }];
 
         let mut rng = StdRng::seed_from_u64(0);
-        apply_scatter(&mut map, &geometry, &spatial, &rules, &registry, &mut rng);
+        apply_scatter(
+            &mut map,
+            &geometry,
+            &spatial,
+            &rules,
+            &registry,
+            &mut rng,
+            &HashMap::new(),
+        );
 
         // Nothing should have changed.
         for y in 1..4 {
