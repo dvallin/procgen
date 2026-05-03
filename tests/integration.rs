@@ -25,7 +25,7 @@ fn run_full_pipeline() -> procgen::tile::map::TileMap {
     let intent = build_crypt_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
     let geometry_plan = SimpleGeometryPlanner::default()
-        .plan(&spatial_plan)
+        .plan(&spatial_plan, &mut StdRng::seed_from_u64(42))
         .unwrap();
     SimpleRasterizer
         .rasterize(&geometry_plan, &TileRegistry::default_registry())
@@ -43,7 +43,7 @@ fn run_geometry_plan() -> procgen::geometry::geom::GeometryPlan {
     let intent = build_crypt_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
     SimpleGeometryPlanner::default()
-        .plan(&spatial_plan)
+        .plan(&spatial_plan, &mut StdRng::seed_from_u64(42))
         .unwrap()
 }
 
@@ -199,7 +199,7 @@ fn run_tavern_pipeline() -> procgen::tile::map::TileMap {
     let intent = build_tavern_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
     let geometry_plan = SimpleGeometryPlanner::default()
-        .plan(&spatial_plan)
+        .plan(&spatial_plan, &mut StdRng::seed_from_u64(42))
         .unwrap();
     SimpleRasterizer
         .rasterize(&geometry_plan, &TileRegistry::default_registry())
@@ -217,7 +217,7 @@ fn run_tavern_geometry_plan() -> procgen::geometry::geom::GeometryPlan {
     let intent = build_tavern_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
     SimpleGeometryPlanner::default()
-        .plan(&spatial_plan)
+        .plan(&spatial_plan, &mut StdRng::seed_from_u64(42))
         .unwrap()
 }
 
@@ -379,7 +379,8 @@ fn tavern_geometry_passes_validation() {
 fn crypt_plan_with_validation_succeeds() {
     let intent = build_crypt_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    let result = SimpleGeometryPlanner::default().plan_with_validation(&spatial_plan);
+    let result = SimpleGeometryPlanner::default()
+        .plan_with_validation(&spatial_plan, &mut StdRng::seed_from_u64(42));
     assert!(
         result.is_ok(),
         "crypt plan_with_validation should succeed: {:?}",
@@ -391,7 +392,8 @@ fn crypt_plan_with_validation_succeeds() {
 fn tavern_plan_with_validation_succeeds() {
     let intent = build_tavern_intent();
     let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
-    let result = SimpleGeometryPlanner::default().plan_with_validation(&spatial_plan);
+    let result = SimpleGeometryPlanner::default()
+        .plan_with_validation(&spatial_plan, &mut StdRng::seed_from_u64(42));
     assert!(
         result.is_ok(),
         "tavern plan_with_validation should succeed: {:?}",
@@ -463,7 +465,7 @@ fn run_crypt_features() -> (
     let intent = build_crypt_intent();
     let spatial = SimpleSpatialPlanner.plan(&intent).unwrap();
     let geometry = SimpleGeometryPlanner::default()
-        .plan_with_validation(&spatial)
+        .plan_with_validation(&spatial, &mut StdRng::seed_from_u64(42))
         .unwrap();
     let map = SimpleRasterizer
         .rasterize(&geometry, &TileRegistry::default_registry())
@@ -495,7 +497,7 @@ fn run_tavern_features() -> (
     let intent = build_tavern_intent();
     let spatial = SimpleSpatialPlanner.plan(&intent).unwrap();
     let geometry = SimpleGeometryPlanner::default()
-        .plan_with_validation(&spatial)
+        .plan_with_validation(&spatial, &mut StdRng::seed_from_u64(42))
         .unwrap();
     let map = SimpleRasterizer
         .rasterize(&geometry, &TileRegistry::default_registry())
@@ -664,6 +666,8 @@ mod stress_tests {
     use procgen::tile::rasterize::{Rasterizer, SimpleRasterizer};
     use procgen::validate::geometry::GeometryValidator;
     use proptest::prelude::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     /// Strategy for a random NodeRole.
     fn arb_node_role() -> impl Strategy<Value = NodeRole> {
@@ -807,6 +811,7 @@ mod stress_tests {
                     spaces,
                     links,
                     constraints,
+                    location_kind: procgen::intent::map_intent::LocationKind::Dungeon,
                 }
             })
     }
@@ -819,7 +824,8 @@ mod stress_tests {
         #[test]
         fn random_plan_passes_validation(spatial in arb_spatial_plan(3, 10)) {
             let planner = SimpleGeometryPlanner::default();
-            let geometry = planner.plan_with_validation(&spatial);
+            let mut rng = StdRng::seed_from_u64(42);
+            let geometry = planner.plan_with_validation(&spatial, &mut rng);
             prop_assert!(
                 geometry.is_ok(),
                 "plan_with_validation failed for {}-space plan: {:?}",
@@ -848,7 +854,8 @@ mod stress_tests {
         #[test]
         fn random_plan_produces_connected_map(spatial in arb_spatial_plan(3, 8)) {
             let planner = SimpleGeometryPlanner::default();
-            let geometry = planner.plan_with_validation(&spatial);
+            let mut rng = StdRng::seed_from_u64(42);
+            let geometry = planner.plan_with_validation(&spatial, &mut rng);
             prop_assert!(geometry.is_ok(), "geometry planning failed: {:?}", geometry.err());
 
             let rasterizer = SimpleRasterizer;
@@ -880,7 +887,8 @@ mod stress_tests {
         #[test]
         fn random_plan_room_interiors_are_walkable(spatial in arb_spatial_plan(3, 8)) {
             let planner = SimpleGeometryPlanner::default();
-            let geometry = planner.plan_with_validation(&spatial);
+            let mut rng = StdRng::seed_from_u64(42);
+            let geometry = planner.plan_with_validation(&spatial, &mut rng);
             prop_assert!(geometry.is_ok());
             let geometry = geometry.unwrap();
 
@@ -909,7 +917,8 @@ mod stress_tests {
         #[test]
         fn random_plan_no_floor_adjacent_to_void(spatial in arb_spatial_plan(3, 8)) {
             let planner = SimpleGeometryPlanner::default();
-            let geometry = planner.plan_with_validation(&spatial);
+            let mut rng = StdRng::seed_from_u64(42);
+            let geometry = planner.plan_with_validation(&spatial, &mut rng);
             prop_assert!(geometry.is_ok());
 
             let rasterizer = SimpleRasterizer;
@@ -942,7 +951,8 @@ mod stress_tests {
         #[test]
         fn random_plan_doors_connect_two_sides(spatial in arb_spatial_plan(3, 8)) {
             let planner = SimpleGeometryPlanner::default();
-            let geometry = planner.plan_with_validation(&spatial);
+            let mut rng = StdRng::seed_from_u64(42);
+            let geometry = planner.plan_with_validation(&spatial, &mut rng);
             prop_assert!(geometry.is_ok());
 
             let rasterizer = SimpleRasterizer;

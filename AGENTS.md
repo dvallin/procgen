@@ -18,6 +18,7 @@ Working vertical slice with full pipeline, property-based tests, and integration
 - **Phase 4.2 — Tag classification & atmosphere profiles**: `SpaceSpec` gains `structural_tags`, `atmosphere_tags`, `motifs` (replacing flat `tags`). `AtmosphereProfile` bundles weighted scatter/feature/entity influences keyed by tag match. `AtmospherePalette` merges active profiles; the planner samples from the palette. Profiles loaded from `assets/rules/atmospheres.json`.
 - **Phase 4.3 — Room zones & InteriorPlan**: `InteriorPlan` partitions each room into zones (`Center`, `WallBand`, `Corner`, `DoorPath`, `Open`). Reserved door-to-door paths computed once via BFS — scatter and feature planner both exclude reserved cells for non-walkable/blocking placements. `doors_reachable` BFS retained as safety-net. Pipeline: rasterize → reserve paths → scatter → build interiors → feature plan.
 - **Phase 4.4 — Template interiors (constraint-based)**: `InteriorTemplate` declarative data model: match rooms by role/archetype/tag, assign zone→feature directives (`Place { feature_type, max_count }` or `Clear`). Templates loaded from `assets/rules/interior_templates.json` (6 starters: crypt_vault, sacred_chamber, storage_room, treasure_room, hub_hall, guard_post). Feature planner uses zone cells from `InteriorPlan` for template-matched rooms; `Clear` directives prevent blocking features in those zones. Atmosphere rules still apply after template placement (respecting clear zones). Templates configurable via `PipelineConfig.interior_templates`.
+- **Phase 4.5 — Irregular room shapes**: `ShapeRefinement` trait separates layout (WHERE rooms go) from shape (WHAT each room looks like). `RectShape` (no-op default) + `CaveIrregularizer` (carve corners, roughen edges, protect center cross, connectivity BFS). Rooms with `LocationKind::Cave` or atmosphere tag `"natural"` on rooms ≥ 7×7 get irregular footprints. `GeometryPlanner::plan` now takes `&mut dyn RngCore` for deterministic shape generation. Rasterizer gains `connect_doors_to_rooms` step: carves floor from each door inward until reaching existing floor, ensuring connectivity for irregular rooms. `SpatialPlan` carries `location_kind` from `MapIntent`. Geometry validator uses `space.rect` (not `footprint.bounding_rect()`) for boundary checks. Natural cave vocabulary now uses `LocationKind::Cave`.
 
 ## Pipeline (current)
 
@@ -59,7 +60,8 @@ src/
 ├── geometry/            # Concrete geometry placement
 │   ├── geom.rs          # Point, Rect, RectPointIter, Footprint, PlacedSpace, GeometryPlan
 │   ├── planner.rs       # SpatialPlan → GeometryPlan (BFS layout + constraint-aware placement)
-│   └── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
+│   ├── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
+│   └── shape.rs         # ShapeRefinement trait + RectShape (no-op) + CaveIrregularizer (organic cave shapes)
 ├── tile/                # Tile-level rasterization
 │   ├── registry.rs      # TileId newtype, Tile constants, TileProperties, TileRegistry
 │   ├── map.rs           # TileMap (stores Vec<TileId>), flood_fill

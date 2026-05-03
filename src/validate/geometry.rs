@@ -140,14 +140,8 @@ pub fn check_link_connectivity(plan: &GeometryPlan, issues: &mut Vec<ValidationI
         let start = link.points.first().unwrap();
         let end = link.points.last().unwrap();
 
-        let from_space = plan
-            .spaces
-            .iter()
-            .find(|s| s.footprint.bounding_rect().point_on_boundary(start));
-        let to_space = plan
-            .spaces
-            .iter()
-            .find(|s| s.footprint.bounding_rect().point_on_boundary(end));
+        let from_space = plan.spaces.iter().find(|s| s.rect.point_on_boundary(start));
+        let to_space = plan.spaces.iter().find(|s| s.rect.point_on_boundary(end));
 
         if from_space.is_none() {
             issues.push(ValidationIssue {
@@ -193,7 +187,7 @@ pub fn check_link_endpoint_validity(plan: &GeometryPlan, issues: &mut Vec<Valida
         let start_on_boundary = plan
             .spaces
             .iter()
-            .filter(|s| s.footprint.bounding_rect().point_on_boundary(start))
+            .filter(|s| s.rect.point_on_boundary(start))
             .count();
         if start_on_boundary == 0 {
             issues.push(ValidationIssue {
@@ -208,7 +202,7 @@ pub fn check_link_endpoint_validity(plan: &GeometryPlan, issues: &mut Vec<Valida
         let end_on_boundary = plan
             .spaces
             .iter()
-            .filter(|s| s.footprint.bounding_rect().point_on_boundary(end))
+            .filter(|s| s.rect.point_on_boundary(end))
             .count();
         if end_on_boundary == 0 {
             issues.push(ValidationIssue {

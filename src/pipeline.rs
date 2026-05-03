@@ -300,8 +300,8 @@ impl Pipeline {
             "spatial plan ready"
         );
 
-        // ── 3. Geometry planning (retry loop) ──────────────────────────
-        let geometry = self.plan_geometry_with_retries(&spatial)?;
+        // ── 3. Geometry planning (retry loop) ──────────────────────
+        let geometry = self.plan_geometry_with_retries(&spatial, &mut rng)?;
 
         // ── 4. Rasterisation ───────────────────────────────────────
         info!("rasterising tiles");
@@ -392,6 +392,7 @@ impl Pipeline {
     fn plan_geometry_with_retries(
         &self,
         spatial: &SpatialPlan,
+        rng: &mut StdRng,
     ) -> Result<GeometryPlan, PipelineError> {
         let _span = info_span!("geometry_retry_loop").entered();
         let base_config = PlacementConfig::default();
@@ -408,7 +409,7 @@ impl Pipeline {
             );
 
             let planner = SimpleGeometryPlanner { config };
-            let plan = match planner.plan(spatial) {
+            let plan = match planner.plan(spatial, rng) {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(attempt = attempt, error = %e, "geometry planning error");

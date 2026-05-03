@@ -204,6 +204,7 @@ mod tests {
     use super::*;
     use crate::geometry::geom::{Footprint, PlacedSpace, Rect};
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::{
         AtomicSpace, RealizationStyle, SizeHint, SpaceId, SpaceKind, SpaceSpec, SpatialPlan,
     };
@@ -248,6 +249,7 @@ mod tests {
             }],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         }
     }
 

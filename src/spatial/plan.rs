@@ -187,4 +187,7 @@ pub struct SpatialPlan {
     pub links: Vec<SpaceLink>,
     /// Constraints derived from the intent or inferred by the planner.
     pub constraints: Vec<SpatialConstraint>,
+    /// The map's location kind — propagated from MapIntent for downstream use
+    /// (e.g. geometry shape refinement, feature placement).
+    pub location_kind: crate::intent::map_intent::LocationKind,
 }

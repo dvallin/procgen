@@ -132,6 +132,7 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             spaces,
             links,
             constraints,
+            location_kind: intent.location_kind,
         })
     }
 }

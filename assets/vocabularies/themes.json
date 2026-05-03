@@ -236,7 +236,7 @@
     "id": "natural_cave",
     "name": "Natural Cave",
     "description": "A sprawling natural cave system with underground pools, collapsed passages, and bioluminescent fungi.",
-    "location_kind": "Dungeon",
+    "location_kind": "Cave",
     "motifs": ["stone", "damp", "natural"],
     "roles": [
       {

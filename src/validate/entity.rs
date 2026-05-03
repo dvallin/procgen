@@ -245,6 +245,7 @@ mod tests {
     use crate::feature::registry::FeatureType;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::*;
     use crate::tag::Tag;
 
@@ -318,6 +319,7 @@ mod tests {
             }],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         }
     }
 

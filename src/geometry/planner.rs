@@ -4,7 +4,9 @@ use tracing::{debug, info, info_span, warn};
 
 use crate::geometry::geom::*;
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
+use crate::geometry::shape::select_shape_refinement;
 use crate::intent::graph::NodeRole;
+use crate::intent::map_intent::LocationKind;
 use crate::spatial::plan::{SpaceId, SpaceKind, SpatialConstraint, SpatialPlan};
 use crate::validate::Validator;
 use crate::validate::geometry::GeometryValidator;
@@ -33,7 +35,11 @@ impl std::fmt::Display for GeometryPlanError {
 impl std::error::Error for GeometryPlanError {}
 
 pub trait GeometryPlanner {
-    fn plan(&self, spatial: &SpatialPlan) -> Result<GeometryPlan, GeometryPlanError>;
+    fn plan(
+        &self,
+        spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<GeometryPlan, GeometryPlanError>;
 }
 
 /// Configuration for constraint-aware placement.
@@ -60,7 +66,11 @@ pub struct SimpleGeometryPlanner {
 }
 
 impl GeometryPlanner for SimpleGeometryPlanner {
-    fn plan(&self, spatial: &SpatialPlan) -> Result<GeometryPlan, GeometryPlanError> {
+    fn plan(
+        &self,
+        spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<GeometryPlan, GeometryPlanError> {
         if spatial.spaces.is_empty() {
             return Err(GeometryPlanError::EmptyPlan);
         }
@@ -117,6 +127,10 @@ impl GeometryPlanner for SimpleGeometryPlanner {
             );
         }
 
+        // ── Shape refinement: transform rects into organic footprints ──
+        let location_kind = spatial.location_kind;
+        apply_shape_refinement(&mut placed, spatial, location_kind, rng);
+
         // Route links between placed spaces.
         let links = ZShapeRouter.route(spatial, &placed);
         info!(corridors = links.len(), "routing complete");
@@ -134,6 +148,7 @@ impl SimpleGeometryPlanner {
     pub fn plan_with_validation(
         &self,
         spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
     ) -> Result<GeometryPlan, GeometryPlanError> {
         let _span = info_span!("plan_with_validation").entered();
         const MAX_RETRIES: u32 = 3;
@@ -154,7 +169,7 @@ impl SimpleGeometryPlanner {
                 separation_gap = planner.config.separation_gap,
                 "planning attempt"
             );
-            let plan = planner.plan(spatial)?;
+            let plan = planner.plan(spatial, rng)?;
             let result = GeometryValidator::default().validate(&plan);
 
             // Log all validation issues.
@@ -606,6 +621,48 @@ fn get_space_dimensions(space: &crate::spatial::plan::SpaceSpec) -> (i32, i32) {
     }
 }
 
+/// Apply shape refinement to each placed space based on location kind and tags.
+///
+/// Rooms with `LocationKind::Cave` or atmosphere tag `"natural"` (and large enough
+/// bounding rect ≥ 7×7) get organic irregular footprints via [`CaveIrregularizer`].
+/// All other rooms keep their rectangular footprints.
+fn apply_shape_refinement(
+    placed: &mut [PlacedSpace],
+    spatial: &SpatialPlan,
+    location_kind: LocationKind,
+    rng: &mut dyn rand::RngCore,
+) {
+    for space in placed.iter_mut() {
+        // Find the corresponding SpaceSpec.
+        let spec = spatial
+            .spaces
+            .iter()
+            .find(|s| s.id == space.space_id)
+            .expect("placed space must have matching spec");
+
+        // Only irregularize rooms large enough (7×7 minimum).
+        if space.rect.w < 7 || space.rect.h < 7 {
+            continue;
+        }
+
+        let shape = select_shape_refinement(location_kind, spec);
+        let new_footprint = shape.refine(space.rect, spec, rng);
+
+        // Only update if shape changed from the default rect.
+        if new_footprint != Footprint::Rect(space.rect) {
+            debug!(
+                id = space.space_id.0,
+                cells = match &new_footprint {
+                    Footprint::Cells(c) => c.len(),
+                    _ => 0,
+                },
+                "applied irregular shape"
+            );
+            space.footprint = new_footprint;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +673,8 @@ mod tests {
     };
     use crate::validate::geometry::{GeometryValidator, GeometryValidatorConfig};
     use crate::validate::{Severity, Validator};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     /// Helper: build a simple space spec.
     fn make_space(id: u32, role: NodeRole, w: i32, h: i32) -> SpaceSpec {
@@ -670,6 +729,7 @@ mod tests {
                 SpatialConstraint::PreferCentral { space: SpaceId(1) },
                 SpatialConstraint::PreferPerimeter { space: SpaceId(0) },
             ],
+            location_kind: LocationKind::Dungeon,
         }
     }
 
@@ -677,7 +737,8 @@ mod tests {
     fn prefer_central_space_is_at_depth_zero() {
         let spatial = hub_and_entry_plan();
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         // The hub (space 1) has PreferCentral, so it should be the BFS root
         // and placed at the leftmost column (depth 0).
@@ -705,7 +766,8 @@ mod tests {
     fn prefer_perimeter_shifts_space_outward() {
         let spatial = hub_and_entry_plan();
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let entry = plan
             .spaces
@@ -761,6 +823,7 @@ mod tests {
                 a: SpaceId(1),
                 b: SpaceId(2),
             }],
+            location_kind: LocationKind::Dungeon,
         };
 
         let planner = SimpleGeometryPlanner {
@@ -769,7 +832,8 @@ mod tests {
                 separation_gap: 8,
             },
         };
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let s1 = plan
             .spaces
@@ -813,6 +877,7 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let min_gap = 3;
@@ -822,7 +887,8 @@ mod tests {
                 separation_gap: 6,
             },
         };
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         for i in 0..plan.spaces.len() {
             for j in (i + 1)..plan.spaces.len() {
@@ -843,7 +909,8 @@ mod tests {
     fn no_overlaps_after_constraint_adjustments() {
         let spatial = hub_and_entry_plan();
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         for i in 0..plan.spaces.len() {
             for j in (i + 1)..plan.spaces.len() {
@@ -861,7 +928,8 @@ mod tests {
     fn geometry_validator_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let validator = GeometryValidator::new(GeometryValidatorConfig { min_spacing: 1 });
         let result = validator.validate(&plan);
@@ -904,10 +972,12 @@ mod tests {
                 a: SpaceId(1),
                 b: SpaceId(2),
             }],
+            location_kind: LocationKind::Dungeon,
         };
 
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let validator = GeometryValidator::new(GeometryValidatorConfig { min_spacing: 1 });
         let result = validator.validate(&plan);
@@ -930,9 +1000,11 @@ mod tests {
             spaces: vec![],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let planner = SimpleGeometryPlanner::default();
-        assert!(planner.plan(&spatial).is_err());
+        let mut rng = StdRng::seed_from_u64(42);
+        assert!(planner.plan(&spatial, &mut rng).is_err());
     }
 
     #[test]
@@ -941,9 +1013,11 @@ mod tests {
             spaces: vec![make_space(0, NodeRole::Entry, 7, 7)],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         assert_eq!(plan.spaces.len(), 1);
         assert_eq!(plan.spaces[0].rect.w, 7);
@@ -954,7 +1028,8 @@ mod tests {
     fn plan_with_validation_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
         let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan_with_validation(&spatial);
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan_with_validation(&spatial, &mut rng);
         assert!(
             plan.is_ok(),
             "plan_with_validation should succeed: {:?}",

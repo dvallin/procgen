@@ -478,6 +478,7 @@ mod tests {
     use crate::feature::rules::default_rules;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::*;
     use crate::tile::registry::Tile;
     use rand::SeedableRng;
@@ -571,6 +572,7 @@ mod tests {
             )],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let geometry = GeometryPlan {
             spaces: vec![make_placed(0)],
@@ -612,6 +614,7 @@ mod tests {
             )],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let geometry = GeometryPlan {
             spaces: vec![make_placed(0)],
@@ -653,6 +656,7 @@ mod tests {
             )],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let geometry = GeometryPlan {
             spaces: vec![make_placed(0)],
@@ -722,6 +726,7 @@ mod tests {
             ],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let rect = Rect {
@@ -783,6 +788,7 @@ mod tests {
             )],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
         let geometry = GeometryPlan {
             spaces: vec![make_placed(0)],

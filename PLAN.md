@@ -149,8 +149,8 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 | 4.1 | **Feature Registry & FeatureCategory enum** | ✅ | Mirror the tile registry pattern for features. Replace `FeatureKind` enum variants with a `feature_type: String` identifier + `FeatureRegistry` mapping type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for gameplay behavior dispatch. Feature rules reference type strings ("altar", "chest") instead of enum variants. New feature types added via JSON without code changes. |
 | 4.2 | **Tag classification & atmosphere profiles** | ✅ | Split the flat `tags: Vec<Tag>` into typed fields on SpaceSpec: `structural_tags` (main_goal, locked — hard triggers), `atmosphere` (damp, echoing — soft flavor), `motifs` (rat_infestation — cross-cutting directives). Introduce **atmosphere profiles** (`assets/rules/atmospheres.json`): bundles of weighted scatter/feature/entity influences keyed by atmosphere combination. Rooms accumulate influences from matching profiles; the planner samples from the resulting palette. Replaces brittle one-off rules like `{ match_tag: "vast", feature: "stalagmite" }` with coherent taste bundles. |
 | 4.3 | **Room zones & InteriorPlan** | ✅ | `InteriorPlan { space_id, rect, zones, doors, reserved_paths, path_intents }`. Zones partition a room's interior into `ZoneKind::{Center, WallBand, Corner, DoorPath, Open}`. Reserved paths (door-to-door BFS shortest paths) are pre-computed once and enforced by both scatter (non-walkable tiles never placed on reserved cells) and the feature planner (blocking features excluded from reserved cells via `pick_candidate`). `doors_reachable` BFS retained as safety-net validation. Computed after rasterization+scatter, consumed by FeaturePlan. |
-| 4.4 | **Template interiors (constraint-based)** | Not fixed prefabs — declarative templates with spatial constraints. E.g. `crypt_vault: { center: altar, wall-band: candles, clear: door-path }`. `tavern_storage: { wall-band: shelves, corners: barrels, center: clear }`. Templates produce an `InteriorPlan`; the feature planner respects it. |
-| 4.5 | **Irregular room shapes** | Pull a minimal version of cave irregularity forward. `Footprint::Cells(Vec<Point>)` already exists — add an irregularizer that starts with a rect, carves corners, roughens edges, and preserves connectivity. Rooms with `LocationKind::Cave` or tag `"natural"` use it. Fixes the "office building under moss" look. |
+| 4.4 | **Template interiors (constraint-based)** | ✅ | Not fixed prefabs — declarative templates with spatial constraints. E.g. `crypt_vault: { center: altar, wall-band: candles, clear: door-path }`. `tavern_storage: { wall-band: shelves, corners: barrels, center: clear }`. Templates produce an `InteriorPlan`; the feature planner respects it. |
+| 4.5 | **Irregular room shapes** | ✅ | Introduce `ShapeRefinement` trait as a composable per-room shape transform. `CaveIrregularizer` is the first non-trivial implementation: starts with a rect, carves corners, roughens edges, preserves connectivity. Rooms with `LocationKind::Cave` or tag `"natural"` use it. Fixes the "office building under moss" look. Architecture separates layout (WHERE rooms go) from shape (WHAT each room looks like) — future algorithms (BSP, L-systems, cellular automata) can replace layout independently or compose with existing shape refinements. |
 | 4.6 | **MotifDirective** | `struct MotifDirective { motif: MotifId, scope: MotifScope, effects: Vec<MotifEffect> }`. Effects: `AddRoomTag`, `PreferArchetype`, `RequireFeature`, `AddTerrainScatter`, `AddEntityPressure`. Vocabularies can emit directives alongside labels/tags. **Application is phased explicitly:** intent-phase effects (PreferArchetype) run before spatial planning; spatial-phase effects (AddRoomTag) run before geometry; composition-phase effects (RequireFeature) run before feature planning; entity-phase effects (AddEntityPressure) run before entity planning. Not separate structs yet, but phase of application is a field on each effect. |
 | 4.7 | **New Scenario: Rat-Infested Port Cellar** | Extends the tavern vocabulary with a `"vermin"` motif. The motif adds `"infested"` tags to storage rooms, requires `"rat_nest"` features near food, adds rat entity pressure. Proves motif directives + atmosphere profiles produce coherent themed rooms without per-scenario code. |
 
@@ -160,6 +160,37 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 - Irregular footprints are a geometry-layer concern; scatter + features work on any footprint shape via `Footprint::cells()` iterator.
 - MotifDirectives do NOT create new architectural seams between stages. They inject tags/requirements into existing data structures that downstream stages already read. But application is *phased*: each effect declares which pipeline stage it targets (intent, spatial, composition, feature, entity). This prevents spooky action at a distance.
 - Atmosphere profiles replace the proliferation of one-off tag→feature rules. A profile bundles scatter + features + entities into a coherent palette. The planner *samples from* the palette rather than deterministically firing every matching rule.
+
+**Geometry architecture (introduced in 4.5):**
+
+`SimpleGeometryPlanner` conflates three concerns that should be independently replaceable:
+1. **Layout** — where rooms sit relative to each other (BFS columns currently; BSP, force-directed, L-system in future).
+2. **Shape** — what each room's footprint looks like (`ShapeRefinement` trait; rect, cave irregular, cellular automata, L-shaped in future).
+3. **Routing** — how corridors connect rooms (already abstracted via `CorridorRouter` trait).
+
+Shape is extracted in 4.5 as the `ShapeRefinement` trait. Layout stays inlined in `SimpleGeometryPlanner` for now — extract when a second layout algorithm arrives. The composition:
+```
+GeometryPlanner (trait — public pipeline contract)
+├── SimpleGeometryPlanner (composes):
+│   ├── Layout: BFS columns (internal, not yet a trait)
+│   ├── ShapeRefinement: per-room footprint transform (trait)
+│   │   ├── RectShape (no-op, default)
+│   │   └── CaveIrregularizer (4.5)
+│   └── CorridorRouter: Z-shape (existing trait)
+├── (future) BSPGeometryPlanner
+├── (future) CellularAutomataPlanner
+└── (future) HierarchicalGeometryPlanner
+```
+
+**4.5 subtasks:**
+| # | Subtask | Description |
+|---|---------|-------------|
+| 4.5.1 | `ShapeRefinement` trait + `CaveIrregularizer` | ✅ | New `src/geometry/shape.rs`. Trait: `fn refine(rect, space, rng) → Footprint`. `RectShape` (no-op) + `CaveIrregularizer` (carve corners, roughen edges, connectivity BFS, min-cell-count fallback). |
+| 4.5.2 | Thread RNG into geometry planning | ✅ | Extend `GeometryPlanner::plan` signature to accept `&mut dyn RngCore`. Update all call sites (pipeline, tests). Mechanical but necessary for deterministic irregularization. |
+| 4.5.3 | Wire shape refinement into `SimpleGeometryPlanner` | ✅ | After BFS placement, iterate `PlacedSpace`s. Select `ShapeRefinement` per room: `CaveIrregularizer` if `LocationKind::Cave` or tag `"natural"` on rooms ≥ 7×7, else `RectShape`. Propagate `LocationKind` via `SpatialPlan`. |
+| 4.5.4 | Downstream compatibility | ✅ | Verify/fix zone classification, scatter, feature placement, reserved paths for `Footprint::Cells`. Zones iterate actual floor cells, not rect interior. |
+| 4.5.5 | Tests | ✅ | Unit tests (connectivity, subset-of-rect, min-threshold, determinism). Proptest (any rect ≥ 5×5 produces connected result). Integration: `cargo run -- cave` shows non-rectangular rooms. Existing tests unaffected. |
+| 4.5.6 | Move shape refinement after routing (cleanup) | Run `apply_shape_refinement` AFTER `ZShapeRouter.route()` so the irregularizer knows door positions from corridor endpoints. `ShapeRefinement::refine` gains a `doors: &[Point]` parameter — the irregularizer protects cells on BFS paths from each door to the room center. Remove the protective cross hack and `connect_doors_to_rooms` rasterizer band-aid. Shape is correct by construction, not patched after the fact. No circular dependency: routing uses `space.rect` for exit faces, not `footprint`. |
 
 **Caution:** Tags must remain *soft intent*, not secret bytecode. When rules start needing negation, priority ordering everywhere, or "unless" clauses, the concept must be promoted into typed Rust. Tags are good for signaling; tags are bad as undocumented control flow.
 

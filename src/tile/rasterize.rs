@@ -71,6 +71,10 @@ impl Rasterizer for SimpleRasterizer {
             carve_link(&mut map, link);
         }
 
+        // For irregular rooms, doors on the rect boundary may not connect to
+        // interior floor cells. Ensure each door has a floor connection inward.
+        connect_doors_to_rooms(&mut map, layout);
+
         infer_walls(&mut map, registry);
 
         {
@@ -173,6 +177,90 @@ fn carve_link(map: &mut TileMap, link: &PlacedLink) {
                 _ => Tile::DOOR,
             },
         );
+    }
+}
+
+/// Ensure each door tile connects to the room interior via floor cells.
+///
+/// For irregular footprints, the cell immediately inside the room boundary
+/// (adjacent to the door) may be void. This function finds each door on a room
+/// boundary and carves floor cells inward until reaching existing floor.
+fn connect_doors_to_rooms(map: &mut TileMap, layout: &GeometryPlan) {
+    for space in &layout.spaces {
+        let rect = space.rect;
+        // Scan the boundary of the rect for door tiles.
+        for x in rect.x..rect.x + rect.w {
+            // North edge
+            if map.get(x, rect.y) == Some(Tile::DOOR)
+                || map.get(x, rect.y) == Some(Tile::LOCKED_DOOR)
+            {
+                // Carve south (inward) until we hit existing floor.
+                for dy in 1..(rect.h - 1) {
+                    let y = rect.y + dy;
+                    let tile = map.get(x, y);
+                    if tile == Some(Tile::FLOOR)
+                        || tile == Some(Tile::DOOR)
+                        || tile == Some(Tile::LOCKED_DOOR)
+                    {
+                        break;
+                    }
+                    map.set(x, y, Tile::FLOOR);
+                }
+            }
+            // South edge
+            if map.get(x, rect.y + rect.h - 1) == Some(Tile::DOOR)
+                || map.get(x, rect.y + rect.h - 1) == Some(Tile::LOCKED_DOOR)
+            {
+                // Carve north (inward) until we hit existing floor.
+                for dy in 1..(rect.h - 1) {
+                    let y = rect.y + rect.h - 1 - dy;
+                    let tile = map.get(x, y);
+                    if tile == Some(Tile::FLOOR)
+                        || tile == Some(Tile::DOOR)
+                        || tile == Some(Tile::LOCKED_DOOR)
+                    {
+                        break;
+                    }
+                    map.set(x, y, Tile::FLOOR);
+                }
+            }
+        }
+        for y in rect.y..rect.y + rect.h {
+            // West edge
+            if map.get(rect.x, y) == Some(Tile::DOOR)
+                || map.get(rect.x, y) == Some(Tile::LOCKED_DOOR)
+            {
+                // Carve east (inward) until we hit existing floor.
+                for dx in 1..(rect.w - 1) {
+                    let x = rect.x + dx;
+                    let tile = map.get(x, y);
+                    if tile == Some(Tile::FLOOR)
+                        || tile == Some(Tile::DOOR)
+                        || tile == Some(Tile::LOCKED_DOOR)
+                    {
+                        break;
+                    }
+                    map.set(x, y, Tile::FLOOR);
+                }
+            }
+            // East edge
+            if map.get(rect.x + rect.w - 1, y) == Some(Tile::DOOR)
+                || map.get(rect.x + rect.w - 1, y) == Some(Tile::LOCKED_DOOR)
+            {
+                // Carve west (inward) until we hit existing floor.
+                for dx in 1..(rect.w - 1) {
+                    let x = rect.x + rect.w - 1 - dx;
+                    let tile = map.get(x, y);
+                    if tile == Some(Tile::FLOOR)
+                        || tile == Some(Tile::DOOR)
+                        || tile == Some(Tile::LOCKED_DOOR)
+                    {
+                        break;
+                    }
+                    map.set(x, y, Tile::FLOOR);
+                }
+            }
+        }
     }
 }
 
