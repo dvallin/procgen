@@ -106,7 +106,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
                 if placed_count > 0 {
                     debug!(
                         space_id = ?placed.space_id,
-                        kind = ?rule.kind,
+                        feature_type = %rule.feature_type,
                         count = placed_count,
                         "placed features"
                     );
@@ -145,7 +145,7 @@ fn place_rule(
             Some(point) => {
                 occupied.insert(point);
                 features.push(FeaturePlacement {
-                    kind: rule.kind.clone(),
+                    feature_type: rule.feature_type.clone(),
                     anchor: point,
                     cells: vec![point],
                     space_id,
@@ -230,6 +230,7 @@ fn pick_furthest_from_occupied(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::registry::FeatureType;
     use crate::feature::rules::default_rules;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
@@ -333,13 +334,16 @@ mod tests {
             .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
 
-        let kinds: Vec<&FeatureKind> = plan.features.iter().map(|f| &f.kind).collect();
+        let types: Vec<&FeatureType> = plan.features.iter().map(|f| &f.feature_type).collect();
         assert!(
-            kinds.contains(&&FeatureKind::Table),
+            types.contains(&&FeatureType::from("table")),
             "hub should get a table, got: {:?}",
-            kinds
+            types
         );
-        let barrel_count = kinds.iter().filter(|k| ***k == FeatureKind::Barrel).count();
+        let barrel_count = types
+            .iter()
+            .filter(|t| ***t == FeatureType::from("barrel"))
+            .count();
         assert!(
             barrel_count >= 1,
             "hub should get at least one barrel, got: {}",
@@ -371,7 +375,10 @@ mod tests {
             .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
             .unwrap();
 
-        let has_chest = plan.features.iter().any(|f| f.kind == FeatureKind::Chest);
+        let has_chest = plan
+            .features
+            .iter()
+            .any(|f| f.feature_type == FeatureType::from("chest"));
         assert!(has_chest, "reward room must have a chest");
     }
 

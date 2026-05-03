@@ -3,8 +3,9 @@ use clap::{Parser, ValueEnum};
 use procgen::demo::cave::build_cave_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
+use procgen::feature::registry::FeatureRegistry;
 use procgen::pipeline::{Pipeline, PipelineConfig};
-use procgen::tile::ascii::render_ascii_full;
+use procgen::tile::ascii::render_ascii;
 use procgen::tile::registry::TileRegistry;
 use tracing_subscriber::EnvFilter;
 
@@ -84,10 +85,17 @@ fn main() {
 
     match result {
         Ok(r) => {
-            let registry = TileRegistry::default_registry();
+            let tile_registry = TileRegistry::default_registry();
+            let feature_registry = FeatureRegistry::default_registry();
             println!(
                 "{}",
-                render_ascii_full(&r.tiles, &r.features, &r.entities, &registry)
+                render_ascii(
+                    &r.tiles,
+                    &r.features,
+                    &r.entities,
+                    &tile_registry,
+                    &feature_registry,
+                )
             );
         }
         Err(e) => {

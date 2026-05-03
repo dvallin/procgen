@@ -16,6 +16,7 @@ use crate::entity::planner::{EntityPlanner, SimpleEntityPlanner};
 use crate::entity::rules::EntityRule;
 use crate::feature::plan::{FeaturePlan, FeaturePlanError};
 use crate::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use crate::feature::registry::FeatureRegistry;
 use crate::feature::rules::FeatureRule;
 use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
@@ -67,6 +68,8 @@ pub struct PipelineConfig {
     pub entity_rules: Option<Vec<EntityRule>>,
     /// Optional tile registry override. If `None`, uses the default built-in registry.
     pub tile_registry: Option<TileRegistry>,
+    /// Optional feature registry override. If `None`, uses the default built-in registry.
+    pub feature_registry: Option<FeatureRegistry>,
     /// Optional tile scatter rules override. If `None`, loads from the default asset path.
     pub scatter_rules: Option<Vec<TileScatterRule>>,
 }
@@ -80,6 +83,7 @@ impl Default for PipelineConfig {
             feature_rules: None,
             entity_rules: None,
             tile_registry: None,
+            feature_registry: None,
             scatter_rules: None,
         }
     }
@@ -537,6 +541,7 @@ mod tests {
                 feature_rules: None,
                 entity_rules: None,
                 tile_registry: None,
+                feature_registry: None,
                 scatter_rules: None,
             },
         };
@@ -556,6 +561,7 @@ mod tests {
                 feature_rules: None,
                 entity_rules: None,
                 tile_registry: None,
+                feature_registry: None,
                 scatter_rules: None,
             },
         };

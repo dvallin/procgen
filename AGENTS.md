@@ -14,6 +14,7 @@ Working vertical slice with full pipeline, property-based tests, and integration
 - **Phase 1 — Data-Driven Rules & Asset Loading** (tasks 1.1–1.5): Feature/entity rules as JSON assets with embedded fallback, generic asset loader, PipelineConfig overrides.
 - **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
 - **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties (walkable, opaque, ascii_char, tags), `TileMap` stores `Vec<TileId>`, backward-compat `Tile` namespace struct with named constants (`Tile::FLOOR`, etc.), JSON asset for tile definitions. Rasterizer accepts `&TileRegistry`. Extended palette (Water, Pit, Stairs, Rubble, Grass). ASCII renderer uses registry for tile characters (`render_ascii_full`). **Tile scatter rules** (`assets/rules/tile_scatter.json`) replace floor tiles with terrain variants at data-driven densities during rasterization — proper separation: tiles ARE the ground (water, rubble, grass), features are objects ON tiles (moss, stalagmites, fungus). Non-walkable scatter is connectivity-safe.
+- **Phase 4.1 — Feature Registry & FeatureCategory enum**: `FeatureType(String)` newtype replaces `FeatureKind` enum. `FeatureRegistry` maps type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for behavior dispatch. Feature rules reference type strings ("altar", "chest") instead of enum variants. New feature types added via `assets/rules/feature_types.json` without code changes.
 
 ## Pipeline (current)
 
@@ -63,7 +64,8 @@ src/
 │   ├── scatter.rs       # TileScatterRule, apply_scatter (tag→tile replacement with density)
 │   └── ascii.rs         # TileMap → String debug rendering (+ feature + entity overlay)
 ├── feature/             # Feature placement
-│   ├── plan.rs          # FeaturePlan, FeaturePlacement, FeatureKind, FeaturePlanError
+│   ├── registry.rs      # FeatureType newtype, FeatureCategory enum, FeatureProperties, FeatureRegistry
+│   ├── plan.rs          # FeaturePlan, FeaturePlacement, Feature constants, FeaturePlanError
 │   ├── placement.rs     # PlacementStrategy enum + tile-finding helpers
 │   ├── rules.rs         # FeatureRule, default_rules(), matching_rules()
 │   └── planner.rs       # FeaturePlanner trait + SimpleFeaturePlanner impl
@@ -86,6 +88,7 @@ assets/
 │   └── themes.json      # Theme vocabularies (undead_nobility, urban_underground)
 └── rules/
     ├── features.json    # Default feature rules (serde JSON, embedded fallback)
+    ├── feature_types.json # Feature type registry (name→category+char+blocking+tags)
     ├── entities.json    # Default entity rules (serde JSON, embedded fallback)
     ├── tiles.json       # Default tile registry (serde JSON, embedded fallback)
     └── tile_scatter.json # Tile scatter rules (tag→tile density, embedded fallback)
@@ -136,7 +139,7 @@ cargo run -- --trace debug         # DEBUG-level (placement details, routing dec
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (309 currently: 228 unit/proptest + 23 regression + 54 integration + 4 doctests)
+cargo test       # Runs all tests (315 currently: 234 unit/proptest + 23 regression + 54 integration + 4 doctests)
 ```
 
 ## Target Architecture

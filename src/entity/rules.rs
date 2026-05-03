@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::entity::plan::EntityArchetypeId;
-use crate::feature::plan::FeatureKind;
+use crate::feature::registry::FeatureType;
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceArchetype, SpaceSpec};
 use crate::tag::Tag;
@@ -20,8 +20,8 @@ pub enum EntityPlacementStrategy {
     RandomFloor,
     /// Place near the room's door(s) — prefer tiles adjacent to doors.
     NearEntrance,
-    /// Place near a specific feature kind (e.g. mimic near a chest).
-    NearFeature(FeatureKind),
+    /// Place near a specific feature type (e.g. mimic near a chest).
+    NearFeature(FeatureType),
 }
 
 /// A single rule that says "if a room matches these criteria, spawn this entity."
@@ -274,7 +274,7 @@ mod tests {
     fn serde_near_feature_variant_round_trips() {
         let rule = EntityRule {
             archetype: EntityArchetypeId::from("trap_mimic"),
-            placement: EntityPlacementStrategy::NearFeature(FeatureKind::Trap),
+            placement: EntityPlacementStrategy::NearFeature(FeatureType::from("trap")),
             min_count: 0,
             max_count: 1,
             behavior_tags: vec![Tag::from("stationary")],
@@ -287,7 +287,7 @@ mod tests {
         let deser: EntityRule = serde_json::from_str(&json).unwrap();
         assert_eq!(
             deser.placement,
-            EntityPlacementStrategy::NearFeature(FeatureKind::Trap)
+            EntityPlacementStrategy::NearFeature(FeatureType::from("trap"))
         );
         assert_eq!(deser.archetype_match, Some(SpaceArchetype::Chamber));
         assert_eq!(deser.tag_match, Some(Tag::from("trapped")));

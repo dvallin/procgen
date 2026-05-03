@@ -1,0 +1,128 @@
+[
+  {
+    "name": "altar",
+    "category": "Interactable",
+    "ascii_char": "†",
+    "blocking": true,
+    "tags": ["religious"]
+  },
+  {
+    "name": "sarcophagus",
+    "category": "Container",
+    "ascii_char": "S",
+    "blocking": true,
+    "tags": ["burial"]
+  },
+  {
+    "name": "chest",
+    "category": "Container",
+    "ascii_char": "$",
+    "blocking": true,
+    "tags": ["loot"]
+  },
+  {
+    "name": "barrel",
+    "category": "Container",
+    "ascii_char": "o",
+    "blocking": true,
+    "tags": ["storage"]
+  },
+  {
+    "name": "shelf",
+    "category": "Furniture",
+    "ascii_char": "=",
+    "blocking": true,
+    "tags": ["storage"]
+  },
+  {
+    "name": "table",
+    "category": "Furniture",
+    "ascii_char": "T",
+    "blocking": true,
+    "tags": ["furniture"]
+  },
+  {
+    "name": "trap",
+    "category": "Trap",
+    "ascii_char": "^",
+    "blocking": false,
+    "tags": ["hazard"]
+  },
+  {
+    "name": "torch",
+    "category": "Decoration",
+    "ascii_char": "!",
+    "blocking": false,
+    "tags": ["light"]
+  },
+  {
+    "name": "moss",
+    "category": "Decoration",
+    "ascii_char": ",",
+    "blocking": false,
+    "tags": ["natural", "cosmetic"]
+  },
+  {
+    "name": "vines",
+    "category": "Decoration",
+    "ascii_char": ",",
+    "blocking": false,
+    "tags": ["natural", "cosmetic"]
+  },
+  {
+    "name": "fungus",
+    "category": "Decoration",
+    "ascii_char": ",",
+    "blocking": false,
+    "tags": ["natural", "cosmetic", "luminous"]
+  },
+  {
+    "name": "stalagmite",
+    "category": "Decoration",
+    "ascii_char": "¤",
+    "blocking": true,
+    "tags": ["natural"]
+  },
+  {
+    "name": "stalactite",
+    "category": "Decoration",
+    "ascii_char": "¤",
+    "blocking": false,
+    "tags": ["natural"]
+  },
+  {
+    "name": "crystal",
+    "category": "Decoration",
+    "ascii_char": "¤",
+    "blocking": false,
+    "tags": ["natural", "luminous"]
+  },
+  {
+    "name": "banner",
+    "category": "Decoration",
+    "ascii_char": "|",
+    "blocking": false,
+    "tags": ["noble", "cosmetic"]
+  },
+  {
+    "name": "tapestry",
+    "category": "Decoration",
+    "ascii_char": "|",
+    "blocking": false,
+    "tags": ["noble", "cosmetic"]
+  },
+  {
+    "name": "lantern",
+    "category": "Decoration",
+    "ascii_char": "!",
+    "blocking": false,
+    "tags": ["light"]
+  },
+  {
+    "name": "rat_nest",
+    "category": "Decoration",
+    "ascii_char": "~",
+    "blocking": false,
+    "tags": ["vermin"]
+  }
+]

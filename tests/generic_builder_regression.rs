@@ -12,7 +12,7 @@ use procgen::intent::graph::{EdgeRole, NodeRole};
 use procgen::intent::map_intent::{IntentConstraint, LocationKind, MapIntent};
 use procgen::pipeline::{Pipeline, PipelineConfig};
 use procgen::situation::SituationContext;
-use procgen::tile::ascii::render_ascii_with_entities;
+use procgen::tile::ascii::render_ascii_default;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -453,11 +453,11 @@ fn pipeline_crypt_determinism() {
             config: config.clone(),
         };
         let r1 = pipeline1.run(&situation).unwrap();
-        let ascii1 = render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
+        let ascii1 = render_ascii_default(&r1.tiles, &r1.features, &r1.entities);
 
         let pipeline2 = Pipeline { config };
         let r2 = pipeline2.run(&situation).unwrap();
-        let ascii2 = render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+        let ascii2 = render_ascii_default(&r2.tiles, &r2.features, &r2.entities);
 
         assert_eq!(
             ascii1, ascii2,
@@ -481,11 +481,11 @@ fn pipeline_tavern_determinism() {
             config: config.clone(),
         };
         let r1 = pipeline1.run(&situation).unwrap();
-        let ascii1 = render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
+        let ascii1 = render_ascii_default(&r1.tiles, &r1.features, &r1.entities);
 
         let pipeline2 = Pipeline { config };
         let r2 = pipeline2.run(&situation).unwrap();
-        let ascii2 = render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+        let ascii2 = render_ascii_default(&r2.tiles, &r2.features, &r2.entities);
 
         assert_eq!(
             ascii1, ascii2,
@@ -506,7 +506,7 @@ fn pipeline_different_seeds_produce_variety() {
         };
         let pipeline = Pipeline { config };
         let r = pipeline.run(&crypt_situation()).unwrap();
-        let ascii = render_ascii_with_entities(&r.tiles, &r.features, &r.entities);
+        let ascii = render_ascii_default(&r.tiles, &r.features, &r.entities);
         crypt_outputs.insert(ascii);
     }
     assert!(
@@ -523,7 +523,7 @@ fn pipeline_different_seeds_produce_variety() {
         };
         let pipeline = Pipeline { config };
         let r = pipeline.run(&tavern_situation()).unwrap();
-        let ascii = render_ascii_with_entities(&r.tiles, &r.features, &r.entities);
+        let ascii = render_ascii_default(&r.tiles, &r.features, &r.entities);
         tavern_outputs.insert(ascii);
     }
     assert!(

@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
 use crate::entity::rules::EntityRule;
+use crate::feature::registry::{FeatureProperties, FeatureRegistry};
 use crate::feature::rules::FeatureRule;
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::vocabulary::ThemeVocabulary;
@@ -35,6 +36,9 @@ const EMBEDDED_TILE_REGISTRY: &str = include_str!("../../assets/rules/tiles.json
 
 /// Default tile scatter rules, embedded at compile time.
 const EMBEDDED_TILE_SCATTER_RULES: &str = include_str!("../../assets/rules/tile_scatter.json");
+
+/// Default feature type registry, embedded at compile time.
+const EMBEDDED_FEATURE_REGISTRY: &str = include_str!("../../assets/rules/feature_types.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -112,7 +116,7 @@ pub fn load_rules<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<T>,
 /// use procgen::asset::load::load_rules_from_str;
 /// use procgen::feature::rules::FeatureRule;
 ///
-/// let json = r#"[{"kind":"Chest","strategy":"Center","required":true,"max_count":1,"match_role":null,"match_archetype":null,"match_tag":null}]"#;
+/// let json = r#"[{"feature_type":"chest","strategy":"Center","required":true,"max_count":1,"match_role":null,"match_archetype":null,"match_tag":null}]"#;
 /// let rules: Vec<FeatureRule> = load_rules_from_str(json, "inline").unwrap();
 /// assert_eq!(rules.len(), 1);
 /// ```
@@ -226,13 +230,27 @@ pub fn load_default_tile_scatter_rules() -> Result<Vec<TileScatterRule>, AssetLo
     load_rules_with_fallback(DEFAULT_TILE_SCATTER_RULES_PATH, EMBEDDED_TILE_SCATTER_RULES)
 }
 
+/// Default file path for the feature type registry, relative to the working directory.
+pub const DEFAULT_FEATURE_REGISTRY_PATH: &str = "assets/rules/feature_types.json";
+
+/// Load the default feature registry.
+///
+/// Tries `assets/rules/feature_types.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist. Builds a [`FeatureRegistry`]
+/// from the loaded feature properties.
+pub fn load_default_feature_registry() -> Result<FeatureRegistry, AssetLoadError> {
+    let props: Vec<FeatureProperties> =
+        load_rules_with_fallback(DEFAULT_FEATURE_REGISTRY_PATH, EMBEDDED_FEATURE_REGISTRY)?;
+    Ok(FeatureRegistry::from_properties(props))
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::entity::plan::EntityArchetypeId;
-    use crate::feature::plan::FeatureKind;
+    use crate::feature::registry::FeatureType;
     use crate::intent::graph::NodeRole;
     use crate::spatial::plan::SpaceArchetype;
     use crate::tag::Tag;
@@ -243,7 +261,9 @@ mod tests {
         assert_eq!(rules.len(), 13);
 
         // Spot-check a known rule.
-        let sarcophagus = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
+        let sarcophagus = rules
+            .iter()
+            .find(|r| r.feature_type == FeatureType::from("sarcophagus"));
         assert!(sarcophagus.is_some());
         let rule = sarcophagus.unwrap();
         assert!(rule.required);
@@ -270,7 +290,7 @@ mod tests {
     fn load_rules_from_str_parses_minimal_json() {
         let json = r#"[
             {
-                "kind": "Table",
+                "feature_type": "table",
                 "strategy": "Center",
                 "required": false,
                 "max_count": 1,
@@ -281,7 +301,7 @@ mod tests {
         ]"#;
         let rules: Vec<FeatureRule> = load_rules_from_str(json, "test").unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].kind, FeatureKind::Table);
+        assert_eq!(rules[0].feature_type, FeatureType::from("table"));
     }
 
     #[test]

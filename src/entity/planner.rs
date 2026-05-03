@@ -12,7 +12,8 @@ use tracing::{debug, info, info_span};
 
 use crate::entity::plan::*;
 use crate::entity::rules::*;
-use crate::feature::plan::{FeatureKind, FeaturePlan};
+use crate::feature::plan::FeaturePlan;
+use crate::feature::registry::FeatureType;
 use crate::geometry::geom::{GeometryPlan, Point, Rect};
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
@@ -71,12 +72,12 @@ impl EntityPlanner for SimpleEntityPlanner {
         }
 
         // Build feature position lookup for NearFeature strategy.
-        let feature_positions: HashMap<SpaceId, Vec<(FeatureKind, Point)>> = {
-            let mut map: HashMap<SpaceId, Vec<(FeatureKind, Point)>> = HashMap::new();
+        let feature_positions: HashMap<SpaceId, Vec<(FeatureType, Point)>> = {
+            let mut map: HashMap<SpaceId, Vec<(FeatureType, Point)>> = HashMap::new();
             for f in &features.features {
                 map.entry(f.space_id)
                     .or_default()
-                    .push((f.kind.clone(), f.anchor));
+                    .push((f.feature_type.clone(), f.anchor));
             }
             map
         };
@@ -187,7 +188,7 @@ struct RoomContext<'a> {
     space_id: SpaceId,
     rect: Rect,
     tiles: &'a TileMap,
-    room_features: &'a [(FeatureKind, Point)],
+    room_features: &'a [(FeatureType, Point)],
     density_cap: u32,
 }
 
@@ -265,7 +266,7 @@ fn pick_entity_candidate(
     tiles: &TileMap,
     rect: Rect,
     occupied: &HashSet<Point>,
-    room_features: &[(FeatureKind, Point)],
+    room_features: &[(FeatureType, Point)],
     rng: &mut dyn rand::RngCore,
 ) -> Option<Point> {
     match strategy {
@@ -288,11 +289,8 @@ fn pick_entity_candidate(
                 Some(candidates[0])
             }
         }
-        EntityPlacementStrategy::NearFeature(kind) => {
-            let target = room_features
-                .iter()
-                .find(|(k, _)| k == kind)
-                .map(|(_, p)| *p);
+        EntityPlacementStrategy::NearFeature(ft) => {
+            let target = room_features.iter().find(|(k, _)| k == ft).map(|(_, p)| *p);
             match target {
                 Some(feature_pos) => {
                     let mut candidates = find_walkable_floor(tiles, rect, occupied);
@@ -421,6 +419,7 @@ mod tests {
     use super::*;
     use crate::entity::rules::default_entity_rules;
     use crate::feature::plan::FeaturePlacement;
+    use crate::feature::registry::FeatureType;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
@@ -605,7 +604,7 @@ mod tests {
             features: feature_cells
                 .iter()
                 .map(|&p| FeaturePlacement {
-                    kind: FeatureKind::Barrel,
+                    feature_type: FeatureType::from("barrel"),
                     anchor: p,
                     cells: vec![p],
                     space_id: SpaceId(0),
@@ -740,7 +739,7 @@ mod tests {
         // Occupy the only floor tile with a feature.
         let features = FeaturePlan {
             features: vec![FeaturePlacement {
-                kind: FeatureKind::Barrel,
+                feature_type: FeatureType::from("barrel"),
                 anchor: Point { x: 1, y: 1 },
                 cells: vec![Point { x: 1, y: 1 }],
                 space_id: SpaceId(0),

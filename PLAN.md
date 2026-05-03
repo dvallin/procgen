@@ -142,26 +142,28 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 ### Phase 4: Motifs & Room Composition
 
-**Goal:** Rooms gain spatial identity through constrained templates and zones. Features become data-driven like tiles. Motifs begin to influence structure, not just decoration.
+**Goal:** Rooms gain spatial identity through constrained templates and zones. Features become data-driven like tiles. Motifs begin to influence structure, not just decoration. Tags gain classification so their intent is visible.
 
 | # | Task | Description |
 |---|---|---|
 | 4.1 | **Feature Registry & FeatureCategory enum** | Mirror the tile registry pattern for features. Replace `FeatureKind` enum variants with a `feature_type: String` identifier + `FeatureRegistry` mapping type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for gameplay behavior dispatch. Feature rules reference type strings ("altar", "chest") instead of enum variants. New feature types added via JSON without code changes. |
-| 4.2 | **Room zones & InteriorPlan** | Introduce `InteriorPlan { space_id, zones: Vec<Zone>, required_features: Vec<FeatureRequest>, reserved_paths: Vec<PathIntent> }`. Zones partition a room’s interior (center, wall-band, corners, door-path). Feature placement consults zones instead of raw tile queries. Reserved paths (door-to-door) are never blocked. Computed after GeometryPlan (needs concrete shapes), consumed by FeaturePlan. |
-| 4.3 | **Template interiors (constraint-based)** | Not fixed prefabs — declarative templates with spatial constraints. E.g. `crypt_vault: { center: altar, wall-band: candles, clear: door-path }`. `tavern_storage: { wall-band: shelves, corners: barrels, center: clear }`. Templates produce an `InteriorPlan`; the feature planner respects it. |
-| 4.4 | **Irregular room shapes** | Pull a minimal version of cave irregularity forward. `Footprint::Cells(Vec<Point>)` already exists — add an irregularizer that starts with a rect, carves corners, roughens edges, and preserves connectivity. Rooms with `LocationKind::Cave` or tag `"natural"` use it. Fixes the "office building under moss" look. |
-| 4.5 | **MotifDirective** | `struct MotifDirective { motif: MotifId, scope: MotifScope, effects: Vec<MotifEffect> }`. Effects: `AddRoomTag`, `PreferArchetype`, `RequireFeature`, `AddTerrainScatter`, `AddEntityPressure`. Vocabularies can emit directives alongside labels/tags. **Application is phased explicitly:** intent-phase effects (PreferArchetype) run before spatial planning; spatial-phase effects (AddRoomTag) run before geometry; composition-phase effects (RequireFeature) run before feature planning; entity-phase effects (AddEntityPressure) run before entity planning. Not separate structs yet, but phase of application is a field on each effect. |
-| 4.6 | **New Scenario: Rat-Infested Port Cellar** | Extends the tavern vocabulary with a `"vermin"` motif. The motif adds `"infested"` tags to storage rooms, requires `"rat_nest"` features near food, adds rat entity pressure. Proves motif directives affect content without hard-coded scenario logic. |
+| 4.2 | **Tag classification & atmosphere profiles** | Split the flat `tags: Vec<Tag>` into typed fields on SpaceSpec: `structural_tags` (main_goal, locked — hard triggers), `atmosphere` (damp, echoing — soft flavor), `motifs` (rat_infestation — cross-cutting directives). Introduce **atmosphere profiles** (`assets/rules/atmospheres.json`): bundles of weighted scatter/feature/entity influences keyed by atmosphere combination. Rooms accumulate influences from matching profiles; the planner samples from the resulting palette. Replaces brittle one-off rules like `{ match_tag: "vast", feature: "stalagmite" }` with coherent taste bundles. |
+| 4.3 | **Room zones & InteriorPlan** | Introduce `InteriorPlan { space_id, zones: Vec<Zone>, required_features: Vec<FeatureRequest>, reserved_paths: Vec<PathIntent> }`. Zones partition a room’s interior (center, wall-band, corners, door-path). Feature placement consults zones instead of raw tile queries. Reserved paths (door-to-door) are never blocked. Computed after GeometryPlan (needs concrete shapes), consumed by FeaturePlan. |
+| 4.4 | **Template interiors (constraint-based)** | Not fixed prefabs — declarative templates with spatial constraints. E.g. `crypt_vault: { center: altar, wall-band: candles, clear: door-path }`. `tavern_storage: { wall-band: shelves, corners: barrels, center: clear }`. Templates produce an `InteriorPlan`; the feature planner respects it. |
+| 4.5 | **Irregular room shapes** | Pull a minimal version of cave irregularity forward. `Footprint::Cells(Vec<Point>)` already exists — add an irregularizer that starts with a rect, carves corners, roughens edges, and preserves connectivity. Rooms with `LocationKind::Cave` or tag `"natural"` use it. Fixes the "office building under moss" look. |
+| 4.6 | **MotifDirective** | `struct MotifDirective { motif: MotifId, scope: MotifScope, effects: Vec<MotifEffect> }`. Effects: `AddRoomTag`, `PreferArchetype`, `RequireFeature`, `AddTerrainScatter`, `AddEntityPressure`. Vocabularies can emit directives alongside labels/tags. **Application is phased explicitly:** intent-phase effects (PreferArchetype) run before spatial planning; spatial-phase effects (AddRoomTag) run before geometry; composition-phase effects (RequireFeature) run before feature planning; entity-phase effects (AddEntityPressure) run before entity planning. Not separate structs yet, but phase of application is a field on each effect. |
+| 4.7 | **New Scenario: Rat-Infested Port Cellar** | Extends the tavern vocabulary with a `"vermin"` motif. The motif adds `"infested"` tags to storage rooms, requires `"rat_nest"` features near food, adds rat entity pressure. Proves motif directives + atmosphere profiles produce coherent themed rooms without per-scenario code. |
 
 **Design decisions:**
 - InteriorPlan is computed *after* GeometryPlan (needs concrete rect/footprint) but *before* FeaturePlan (features need zones). It sits alongside TileMap, not after it — the pipeline is a DAG from GeometryPlan onward.
 - Templates are matched by `(archetype, theme_tags)` — a room can fall back to rule-based placement if no template matches.
 - Irregular footprints are a geometry-layer concern; scatter + features work on any footprint shape via `Footprint::cells()` iterator.
 - MotifDirectives do NOT create new architectural seams between stages. They inject tags/requirements into existing data structures that downstream stages already read. But application is *phased*: each effect declares which pipeline stage it targets (intent, spatial, composition, feature, entity). This prevents spooky action at a distance.
+- Atmosphere profiles replace the proliferation of one-off tag→feature rules. A profile bundles scatter + features + entities into a coherent palette. The planner *samples from* the palette rather than deterministically firing every matching rule.
 
 **Caution:** Tags must remain *soft intent*, not secret bytecode. When rules start needing negation, priority ordering everywhere, or "unless" clauses, the concept must be promoted into typed Rust. Tags are good for signaling; tags are bad as undocumented control flow.
 
-**Exit criterion:** Cave rooms have visibly irregular shapes. At least 2 room templates produce spatial layouts (not random scatter). A motif demonstrably alters room content across a scenario without per-scenario code. Reserved paths are validated: templates and required features cannot block door-to-door traversal.
+**Exit criterion:** Cave rooms have visibly irregular shapes. At least 2 room templates produce spatial layouts (not random scatter). A motif demonstrably alters room content across a scenario without per-scenario code. Reserved paths are validated: templates and required features cannot block door-to-door traversal. Tags are classified — structural vs. atmospheric intent is visible in data, not implicit.
 
 ---
 
@@ -313,6 +315,43 @@ Motifs are cross-cutting: they add tags, prefer archetypes, require features, al
 ### When do tags become too powerful?
 
 Tags are soft intent — they signal, they don’t command. Danger signs: rules needing negation (`not: "damp"`), priority ordering everywhere, "unless" clauses, tags encoding procedural logic. When that happens, promote the concept into typed Rust (a new enum variant, a new struct field, a trait method). JSON should never become an accidentally-invented scripting language.
+
+The specific risk: if tags simultaneously serve as descriptive vocabulary, control-flow triggers, feature selectors, terrain selectors, *and* entity selectors, they become secret bytecode. Phase 4 addresses this by classifying tags into typed fields:
+
+```rust
+pub struct SpaceSpec {
+    pub structural_tags: Vec<Tag>,  // main_goal, locked — hard causal triggers
+    pub atmosphere: Vec<Tag>,       // damp, echoing — soft flavor signals
+    pub motifs: Vec<MotifId>,       // rat_infestation — cross-cutting directives
+    pub tags: Vec<Tag>,             // general/unclassified (backward compat)
+}
+```
+
+### Three tiers of asset rules
+
+Not all rules should work the same way:
+
+**1. Structural rules** — explicit, typed, engine behavior:
+- `RestrictedTraversal` → locked door placement
+- Entry rooms skip hostile entities
+- Pattern votes from situation tags
+- Tile walkability/opacity
+
+These are causal and must remain visible in code.
+
+**2. Content rules** — explicit data, direct matching:
+- `Vault + main_goal` → Sarcophagus required
+- `locked Gate` → guardian near door
+- Tile scatter: `flooded` → Water at 15%
+
+These are good as direct JSON rules with clear match criteria.
+
+**3. Atmospheric influences** — bundled, weighted, profile-based:
+- `damp + underground` → { water, moss, rats } weighted palette
+- `noble + crypt` → { sarcophagus, altar, candles } palette
+- `port + cellar` → { barrels, crates, rats } palette
+
+These should be atmosphere profiles (Phase 4.2), not hundreds of one-off rules. Rooms accumulate influences from matching profiles and the planner samples from the merged palette. Less spreadsheet wiring, more coherent taste.
 
 ---
 

@@ -241,7 +241,8 @@ fn check_door_tile(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec<Validati
 mod tests {
     use super::*;
     use crate::entity::plan::{EntityArchetypeId, EntityPlacement};
-    use crate::feature::plan::{FeatureKind, FeaturePlacement};
+    use crate::feature::plan::FeaturePlacement;
+    use crate::feature::registry::FeatureType;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
@@ -391,7 +392,7 @@ mod tests {
         let spatial = make_spatial(NodeRole::Hub, &["noble"]);
         let features = FeaturePlan {
             features: vec![FeaturePlacement {
-                kind: FeatureKind::Barrel,
+                feature_type: FeatureType::from("barrel"),
                 anchor: Point { x: 3, y: 3 },
                 cells: vec![Point { x: 3, y: 3 }],
                 space_id: SpaceId(0),

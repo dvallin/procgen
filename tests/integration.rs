@@ -445,8 +445,8 @@ fn tavern_doors_connect_two_sides() {
 // Phase 5: Feature placement integration tests
 // ============================================================
 
-use procgen::feature::plan::FeatureKind;
 use procgen::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use procgen::feature::registry::FeatureType;
 use procgen::feature::rules::default_rules;
 use procgen::validate::feature::{FeatureValidationInput, FeatureValidator};
 
@@ -566,7 +566,7 @@ fn tavern_has_table_in_hub() {
     let has_table = features
         .features
         .iter()
-        .any(|f| f.kind == FeatureKind::Table);
+        .any(|f| f.feature_type == FeatureType::from("table"));
     assert!(has_table, "tavern should have a table in the taproom hub");
 }
 
@@ -605,7 +605,11 @@ fn tavern_features_no_overlap() {
 #[test]
 fn crypt_ascii_output_contains_feature_chars() {
     let (_, _, map, features) = run_crypt_features();
-    let output = procgen::tile::ascii::render_ascii_with_features(&map, &features);
+    let output = procgen::tile::ascii::render_ascii_default(
+        &map,
+        &features,
+        &procgen::entity::plan::EntityPlan::empty(),
+    );
     // Should contain at least one feature character.
     let feature_chars = ['\u{2020}', 'S', '$', 'o', '=', 'T', '^', '~'];
     let has_feature = feature_chars.iter().any(|&ch| output.contains(ch));
@@ -618,7 +622,11 @@ fn crypt_ascii_output_contains_feature_chars() {
 #[test]
 fn tavern_ascii_output_contains_feature_chars() {
     let (_, _, map, features) = run_tavern_features();
-    let output = procgen::tile::ascii::render_ascii_with_features(&map, &features);
+    let output = procgen::tile::ascii::render_ascii_default(
+        &map,
+        &features,
+        &procgen::entity::plan::EntityPlan::empty(),
+    );
     let feature_chars = ['\u{2020}', 'S', '$', 'o', '=', 'T', '^', '~'];
     let has_feature = feature_chars.iter().any(|&ch| output.contains(ch));
     assert!(
@@ -1120,7 +1128,7 @@ fn tavern_entry_has_no_entities() {
 #[test]
 fn crypt_ascii_output_contains_entity_chars() {
     let (_, _, map, features, entities) = run_crypt_entities();
-    let output = procgen::tile::ascii::render_ascii_with_entities(&map, &features, &entities);
+    let output = procgen::tile::ascii::render_ascii_default(&map, &features, &entities);
     let entity_chars = ['r', 's', 'G', '@', 'M', 'E'];
     let has_entity = entity_chars.iter().any(|&ch| output.contains(ch));
     assert!(
@@ -1132,7 +1140,7 @@ fn crypt_ascii_output_contains_entity_chars() {
 #[test]
 fn tavern_ascii_output_contains_entity_chars() {
     let (_, _, map, features, entities) = run_tavern_entities();
-    let output = procgen::tile::ascii::render_ascii_with_entities(&map, &features, &entities);
+    let output = procgen::tile::ascii::render_ascii_default(&map, &features, &entities);
     let entity_chars = ['r', 's', 'G', '@', 'M', 'E'];
     let has_entity = entity_chars.iter().any(|&ch| output.contains(ch));
     assert!(
@@ -1241,10 +1249,8 @@ fn pipeline_determinism_same_seed_same_output() {
     let r2 = pipeline.run(&situation).unwrap();
 
     // Compare ASCII output as a proxy for full equality.
-    let ascii1 =
-        procgen::tile::ascii::render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
-    let ascii2 =
-        procgen::tile::ascii::render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+    let ascii1 = procgen::tile::ascii::render_ascii_default(&r1.tiles, &r1.features, &r1.entities);
+    let ascii2 = procgen::tile::ascii::render_ascii_default(&r2.tiles, &r2.features, &r2.entities);
     assert_eq!(ascii1, ascii2, "same seed should produce identical output");
 }
 
@@ -1268,12 +1274,13 @@ fn pipeline_no_seed_still_valid() {
 #[test]
 fn pipeline_with_custom_feature_rules_override() {
     use procgen::feature::placement::PlacementStrategy;
+    use procgen::feature::registry::FeatureType;
     use procgen::feature::rules::FeatureRule;
 
     let situation = build_crypt_situation();
     // Only place barrels in Hub rooms — no other features anywhere.
     let custom_rules = vec![FeatureRule {
-        kind: FeatureKind::Barrel,
+        feature_type: FeatureType::from("barrel"),
         strategy: PlacementStrategy::WallAdjacent,
         required: false,
         max_count: 1,
@@ -1292,10 +1299,10 @@ fn pipeline_with_custom_feature_rules_override() {
     // All placed features should be Barrels only.
     for f in &result.features.features {
         assert_eq!(
-            f.kind,
-            FeatureKind::Barrel,
+            f.feature_type,
+            FeatureType::from("barrel"),
             "custom rules should only produce Barrels, got: {:?}",
-            f.kind
+            f.feature_type
         );
     }
 }
@@ -1327,7 +1334,7 @@ mod random_rules_tests {
     use procgen::entity::plan::EntityArchetypeId;
     use procgen::entity::rules::{EntityPlacementStrategy, EntityRule};
     use procgen::feature::placement::PlacementStrategy;
-    use procgen::feature::plan::FeatureKind;
+    use procgen::feature::registry::FeatureType;
     use procgen::feature::rules::FeatureRule;
     use procgen::intent::graph::NodeRole;
     use procgen::pipeline::{Pipeline, PipelineConfig};
@@ -1378,18 +1385,18 @@ mod random_rules_tests {
         ]
     }
 
-    /// Strategy for a random FeatureKind.
-    fn arb_feature_kind() -> impl Strategy<Value = FeatureKind> {
+    /// Strategy for a random FeatureType.
+    fn arb_feature_type() -> impl Strategy<Value = FeatureType> {
         prop_oneof![
-            Just(FeatureKind::Altar),
-            Just(FeatureKind::Sarcophagus),
-            Just(FeatureKind::Chest),
-            Just(FeatureKind::Barrel),
-            Just(FeatureKind::Shelf),
-            Just(FeatureKind::Table),
-            Just(FeatureKind::Trap),
-            Just(FeatureKind::Decoration("torch".into())),
-            Just(FeatureKind::Decoration("banner".into())),
+            Just(FeatureType::from("altar")),
+            Just(FeatureType::from("sarcophagus")),
+            Just(FeatureType::from("chest")),
+            Just(FeatureType::from("barrel")),
+            Just(FeatureType::from("shelf")),
+            Just(FeatureType::from("table")),
+            Just(FeatureType::from("trap")),
+            Just(FeatureType::from("torch")),
+            Just(FeatureType::from("banner")),
         ]
     }
 
@@ -1409,14 +1416,14 @@ mod random_rules_tests {
             Just(EntityPlacementStrategy::Center),
             Just(EntityPlacementStrategy::RandomFloor),
             Just(EntityPlacementStrategy::NearEntrance),
-            arb_feature_kind().prop_map(EntityPlacementStrategy::NearFeature),
+            arb_feature_type().prop_map(EntityPlacementStrategy::NearFeature),
         ]
     }
 
     /// Strategy for a random FeatureRule.
     fn arb_feature_rule() -> impl Strategy<Value = FeatureRule> {
         (
-            arb_feature_kind(),
+            arb_feature_type(),
             arb_placement_strategy(),
             any::<bool>(),
             1u32..=4,
@@ -1425,9 +1432,17 @@ mod random_rules_tests {
             arb_tag(),
         )
             .prop_map(
-                |(kind, strategy, required, max_count, match_role, match_archetype, match_tag)| {
+                |(
+                    feature_type,
+                    strategy,
+                    required,
+                    max_count,
+                    match_role,
+                    match_archetype,
+                    match_tag,
+                )| {
                     FeatureRule {
-                        kind,
+                        feature_type,
                         strategy,
                         required,
                         max_count,
