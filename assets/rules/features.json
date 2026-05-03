@@ -18,29 +18,11 @@
     "match_tag": null
   },
   {
-    "feature_type": "barrel",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": "Hub",
-    "match_archetype": null,
-    "match_tag": null
-  },
-  {
     "feature_type": "chest",
     "strategy": "Center",
     "required": true,
     "max_count": 1,
     "match_role": "Reward",
-    "match_archetype": null,
-    "match_tag": null
-  },
-  {
-    "feature_type": "torch",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": "Entry",
     "match_archetype": null,
     "match_tag": null
   },
@@ -54,33 +36,6 @@
     "match_tag": "main_goal"
   },
   {
-    "feature_type": "torch",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": "Vault",
-    "match_tag": "main_goal"
-  },
-  {
-    "feature_type": "barrel",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "barrels"
-  },
-  {
-    "feature_type": "shelf",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "food"
-  },
-  {
     "feature_type": "chest",
     "strategy": "Corner",
     "required": false,
@@ -88,32 +43,5 @@
     "match_role": null,
     "match_archetype": null,
     "match_tag": "smuggling"
-  },
-  {
-    "feature_type": "moss",
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 3,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "overgrown"
-  },
-  {
-    "feature_type": "stalagmite",
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "vast"
-  },
-  {
-    "feature_type": "fungus",
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 3,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "luminous"
   }
 ]

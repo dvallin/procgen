@@ -623,7 +623,9 @@ mod tests {
             id: SpaceId(id),
             origin: ScenarioNodeId(id),
             role,
-            tags: vec![],
+            structural_tags: vec![],
+            atmosphere_tags: vec![],
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: w,

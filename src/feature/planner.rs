@@ -16,6 +16,7 @@ use crate::feature::rules::{FeatureRule, matching_rules};
 use crate::geometry::geom::GeometryPlan;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
 use crate::tile::map::TileMap;
+use crate::tile::registry::Tile;
 
 /// Trait for producing a [`FeaturePlan`] from upstream layers.
 pub trait FeaturePlanner {
@@ -24,12 +25,15 @@ pub trait FeaturePlanner {
     /// Reads room roles/tags from [`SpatialPlan`], room positions from
     /// [`GeometryPlan`], and tile walkability from [`TileMap`].
     /// The `rules` slice determines which features get placed in which rooms.
+    /// The `per_room_rules` map provides atmosphere-contributed rules that
+    /// apply only to specific rooms (keyed by SpaceId).
     fn plan(
         &self,
         spatial: &SpatialPlan,
         geometry: &GeometryPlan,
         tiles: &TileMap,
         rules: &[FeatureRule],
+        per_room_rules: &HashMap<SpaceId, Vec<FeatureRule>>,
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError>;
 }
@@ -49,6 +53,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         geometry: &GeometryPlan,
         tiles: &TileMap,
         rules: &[FeatureRule],
+        per_room_rules: &HashMap<SpaceId, Vec<FeatureRule>>,
         rng: &mut dyn rand::RngCore,
     ) -> Result<FeaturePlan, FeaturePlanError> {
         let _span = info_span!("feature_planning", rooms = geometry.spaces.len(),).entered();
@@ -60,6 +65,13 @@ impl FeaturePlanner for SimpleFeaturePlanner {
         let mut features = Vec::new();
         // Global occupied set — prevents cross-room overlap on shared boundaries.
         let mut global_occupied: HashSet<crate::geometry::geom::Point> = HashSet::new();
+        // Global blocking set — only cells from features that block movement.
+        // Used for the door-reachability BFS (non-blocking decorations don't count).
+        let mut global_blocking: HashSet<crate::geometry::geom::Point> = HashSet::new();
+        let feature_registry = crate::feature::registry::FeatureRegistry::default_registry();
+
+        // Pre-compute all door positions once (avoids re-scanning the map per placement).
+        let all_doors = find_all_doors(tiles);
 
         for placed in &geometry.spaces {
             let Some(spec) = spec_map.get(&placed.space_id) else {
@@ -71,7 +83,19 @@ impl FeaturePlanner for SimpleFeaturePlanner {
             };
 
             let matched = matching_rules(rules, spec);
-            if matched.is_empty() {
+
+            // Also include per-room atmosphere rules for this space.
+            let atmosphere_rules = per_room_rules.get(&placed.space_id);
+            let all_matched: Vec<&FeatureRule> = matched
+                .into_iter()
+                .chain(
+                    atmosphere_rules
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                )
+                .collect();
+
+            if all_matched.is_empty() {
                 debug!(
                     space_id = ?placed.space_id,
                     label = ?placed.label,
@@ -83,7 +107,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
             debug!(
                 space_id = ?placed.space_id,
                 label = ?placed.label,
-                rule_count = matched.len(),
+                rule_count = all_matched.len(),
                 "matched feature rules"
             );
 
@@ -91,14 +115,18 @@ impl FeaturePlanner for SimpleFeaturePlanner {
             // Per-room occupied starts from the global set (so we don't place
             // on tiles already claimed by an adjacent room's features).
             let mut room_occupied = global_occupied.clone();
+            let mut room_blocking = global_blocking.clone();
 
-            for rule in &matched {
+            for rule in &all_matched {
                 let placed_count = place_rule(
                     rule,
                     placed.space_id,
                     rect,
                     tiles,
+                    &all_doors,
                     &mut room_occupied,
+                    &mut room_blocking,
+                    &feature_registry,
                     &mut features,
                     rng,
                 )?;
@@ -115,6 +143,7 @@ impl FeaturePlanner for SimpleFeaturePlanner {
 
             // Merge room placements into global set.
             global_occupied = room_occupied;
+            global_blocking = room_blocking;
         }
 
         info!(total_features = features.len(), "feature planning complete");
@@ -127,23 +156,44 @@ impl FeaturePlanner for SimpleFeaturePlanner {
 ///
 /// Returns the number of features actually placed. If the rule is `required`
 /// and no candidate position could be found, returns an error.
+///
+/// After each placement, verifies that all doors in the room remain mutually
+/// reachable via BFS (treating blocking cells as impassable). If a placement
+/// would disconnect a door, it is undone and the rule stops trying.
 fn place_rule(
     rule: &FeatureRule,
     space_id: SpaceId,
     rect: crate::geometry::geom::Rect,
     tiles: &TileMap,
+    all_doors: &[crate::geometry::geom::Point],
     occupied: &mut HashSet<crate::geometry::geom::Point>,
+    blocking: &mut HashSet<crate::geometry::geom::Point>,
+    feature_registry: &crate::feature::registry::FeatureRegistry,
     features: &mut Vec<FeaturePlacement>,
     rng: &mut dyn rand::RngCore,
 ) -> Result<u32, FeaturePlanError> {
     let mut placed = 0u32;
+    let is_blocking = feature_registry.is_blocking(&rule.feature_type);
 
     for _ in 0..rule.max_count {
         let candidate = pick_candidate(&rule.strategy, tiles, rect, occupied, rng);
 
         match candidate {
             Some(point) => {
+                // Tentatively place.
                 occupied.insert(point);
+
+                // Only check door reachability for blocking features.
+                if is_blocking {
+                    blocking.insert(point);
+                    if !doors_reachable(tiles, all_doors, blocking) {
+                        // Undo — this placement would disconnect a door.
+                        occupied.remove(&point);
+                        blocking.remove(&point);
+                        break;
+                    }
+                }
+
                 features.push(FeaturePlacement {
                     feature_type: rule.feature_type.clone(),
                     anchor: point,
@@ -164,6 +214,68 @@ fn place_rule(
     }
 
     Ok(placed)
+}
+
+/// Find all door and locked-door positions on the map.
+///
+/// Called once at the start of feature planning to avoid re-scanning
+/// the entire tile map on every connectivity check.
+fn find_all_doors(tiles: &TileMap) -> Vec<crate::geometry::geom::Point> {
+    let mut doors = Vec::new();
+    for y in 0..tiles.height as i32 {
+        for x in 0..tiles.width as i32 {
+            if let Some(tile) = tiles.get(x, y)
+                && (tile == Tile::DOOR || tile == Tile::LOCKED_DOOR)
+            {
+                doors.push(crate::geometry::geom::Point { x, y });
+            }
+        }
+    }
+    doors
+}
+
+/// Check that all doors on the map are mutually reachable via BFS,
+/// treating `blocking` cells as impassable.
+///
+/// Uses a pre-computed door list to avoid re-scanning the map each call.
+/// Returns `true` if all doors can reach each other (or if 0–1 doors exist).
+fn doors_reachable(
+    tiles: &TileMap,
+    doors: &[crate::geometry::geom::Point],
+    blocking: &HashSet<crate::geometry::geom::Point>,
+) -> bool {
+    use std::collections::VecDeque;
+
+    if doors.len() < 2 {
+        return true;
+    }
+
+    // BFS from the first door, treating blocking cells as impassable.
+    let start = doors[0];
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(start);
+    queue.push_back(start);
+
+    while let Some(pos) = queue.pop_front() {
+        for neighbor in pos.cardinals() {
+            if visited.contains(&neighbor) {
+                continue;
+            }
+            if blocking.contains(&neighbor) {
+                continue;
+            }
+            if let Some(tile) = tiles.get(neighbor.x, neighbor.y)
+                && tile.is_walkable()
+            {
+                visited.insert(neighbor);
+                queue.push_back(neighbor);
+            }
+        }
+    }
+
+    // All other doors must be reachable.
+    doors.iter().skip(1).all(|d| visited.contains(d))
 }
 
 /// Pick a single candidate point using the given strategy.
@@ -274,11 +386,16 @@ mod tests {
         archetype: Option<SpaceArchetype>,
         tags: &[&str],
     ) -> SpaceSpec {
+        let raw_tags: Vec<crate::tag::Tag> =
+            tags.iter().map(|s| crate::tag::Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(id),
             origin: ScenarioNodeId(id),
             role,
-            tags: tags.iter().map(|s| crate::tag::Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -311,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn single_hub_room_gets_table_and_barrels() {
+    fn single_hub_room_gets_table() {
         let tiles = make_room_map();
         let spatial = SpatialPlan {
             spaces: vec![make_spec(
@@ -331,7 +448,14 @@ mod tests {
         let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         let types: Vec<&FeatureType> = plan.features.iter().map(|f| &f.feature_type).collect();
@@ -339,15 +463,6 @@ mod tests {
             types.contains(&&FeatureType::from("table")),
             "hub should get a table, got: {:?}",
             types
-        );
-        let barrel_count = types
-            .iter()
-            .filter(|t| ***t == FeatureType::from("barrel"))
-            .count();
-        assert!(
-            barrel_count >= 1,
-            "hub should get at least one barrel, got: {}",
-            barrel_count
         );
     }
 
@@ -372,7 +487,14 @@ mod tests {
         let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         let has_chest = plan
@@ -385,13 +507,13 @@ mod tests {
     #[test]
     fn no_features_overlap() {
         let tiles = make_room_map();
-        // Hub with barrels tag -> multiple barrel rules + table = several features.
+        // Hub room gets table; overlap check is valid even with a single feature.
         let spatial = SpatialPlan {
             spaces: vec![make_spec(
                 0,
                 NodeRole::Hub,
                 Some(SpaceArchetype::Hall),
-                &["barrels"],
+                &["noble"],
             )],
             links: vec![],
             constraints: vec![],
@@ -404,7 +526,14 @@ mod tests {
         let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         let mut all_cells: Vec<crate::geometry::geom::Point> = Vec::new();
@@ -486,7 +615,14 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let rules = default_rules();
 
-        let result = SimpleFeaturePlanner.plan(&spatial, &geometry, &map, &rules, &mut rng);
+        let result = SimpleFeaturePlanner.plan(
+            &spatial,
+            &geometry,
+            &map,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        );
         // The first room claims the only floor tile for the sarcophagus.
         // The second room's required chest has no tiles left → error.
         assert!(
@@ -516,7 +652,14 @@ mod tests {
         let rules = default_rules();
 
         let plan = SimpleFeaturePlanner
-            .plan(&spatial, &geometry, &tiles, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
         assert!(
             plan.features.is_empty(),

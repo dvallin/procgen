@@ -64,7 +64,7 @@ impl EntityRule {
             return false;
         }
         if let Some(ref tag) = self.tag_match
-            && !spec.tags.contains(tag)
+            && !spec.has_tag(tag)
         {
             return false;
         }
@@ -95,11 +95,16 @@ mod tests {
 
     /// Helper: build a minimal SpaceSpec with the given role, archetype, and tags.
     fn make_spec(role: NodeRole, archetype: Option<SpaceArchetype>, tags: &[&str]) -> SpaceSpec {
+        use crate::spatial::plan::classify_tags;
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(0),
             origin: ScenarioNodeId(0),
             role,
-            tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -136,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_gets_skeletons() {
+    fn hub_gets_no_structural_entities() {
         let spec = make_spec(
             NodeRole::Hub,
             Some(SpaceArchetype::Hall),
@@ -145,16 +150,15 @@ mod tests {
         let rules = default_entity_rules();
         let matched = matching_entity_rules(&rules, &spec);
 
-        let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
-            archetypes.contains(&&EntityArchetypeId::from("skeleton")),
-            "hub should get skeletons, got: {:?}",
-            archetypes
+            matched.is_empty(),
+            "hub rooms should have no structural entity rules (atmosphere handles ambient entities), got: {:?}",
+            matched.iter().map(|r| &r.archetype).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn tavern_hub_with_barrels_gets_skeletons_and_rats() {
+    fn hub_with_barrels_gets_no_structural_entities() {
         let spec = make_spec(
             NodeRole::Hub,
             Some(SpaceArchetype::Hall),
@@ -163,14 +167,10 @@ mod tests {
         let rules = default_entity_rules();
         let matched = matching_entity_rules(&rules, &spec);
 
-        let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
-            archetypes.contains(&&EntityArchetypeId::from("skeleton")),
-            "hub should get skeletons"
-        );
-        assert!(
-            archetypes.contains(&&EntityArchetypeId::from("rat")),
-            "hub with 'barrels' tag should also get rats"
+            matched.is_empty(),
+            "hub rooms with barrels should have no structural entity rules (atmosphere handles rats), got: {:?}",
+            matched.iter().map(|r| &r.archetype).collect::<Vec<_>>()
         );
     }
 

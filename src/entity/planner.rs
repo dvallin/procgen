@@ -28,6 +28,8 @@ pub trait EntityPlanner {
     /// [`GeometryPlan`], tile walkability from [`TileMap`], and occupied
     /// cells from [`FeaturePlan`].
     /// The `rules` slice determines which entities get spawned in which rooms.
+    /// The `per_room_rules` map provides atmosphere-contributed rules that
+    /// apply only to specific rooms (keyed by SpaceId).
     fn plan(
         &self,
         spatial: &SpatialPlan,
@@ -35,6 +37,7 @@ pub trait EntityPlanner {
         tiles: &TileMap,
         features: &FeaturePlan,
         rules: &[EntityRule],
+        per_room_rules: &HashMap<SpaceId, Vec<EntityRule>>,
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError>;
 }
@@ -55,6 +58,7 @@ impl EntityPlanner for SimpleEntityPlanner {
         tiles: &TileMap,
         features: &FeaturePlan,
         rules: &[EntityRule],
+        per_room_rules: &HashMap<SpaceId, Vec<EntityRule>>,
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError> {
         let _span = info_span!("entity_planning", rooms = geometry.spaces.len()).entered();
@@ -105,7 +109,19 @@ impl EntityPlanner for SimpleEntityPlanner {
             }
 
             let matched = matching_entity_rules(rules, spec);
-            if matched.is_empty() {
+
+            // Also include per-room atmosphere rules for this space.
+            let atmosphere_rules = per_room_rules.get(&placed.space_id);
+            let all_matched: Vec<&EntityRule> = matched
+                .into_iter()
+                .chain(
+                    atmosphere_rules
+                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                )
+                .collect();
+
+            if all_matched.is_empty() {
                 debug!(
                     space_id = ?placed.space_id,
                     label = ?placed.label,
@@ -117,7 +133,7 @@ impl EntityPlanner for SimpleEntityPlanner {
             debug!(
                 space_id = ?placed.space_id,
                 label = ?placed.label,
-                rule_count = matched.len(),
+                rule_count = all_matched.len(),
                 "matched entity rules"
             );
 
@@ -141,7 +157,7 @@ impl EntityPlanner for SimpleEntityPlanner {
                 density_cap,
             };
 
-            for rule in &matched {
+            for rule in &all_matched {
                 let placed_count = place_entity_rule(
                     rule,
                     &room_ctx,
@@ -459,11 +475,16 @@ mod tests {
         archetype: Option<SpaceArchetype>,
         tags: &[&str],
     ) -> SpaceSpec {
+        use crate::spatial::plan::classify_tags;
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(id),
             origin: ScenarioNodeId(id),
             role,
-            tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -496,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_room_gets_skeletons() {
+    fn hub_room_gets_no_structural_entities() {
         let tiles = make_room_map();
         let spatial = SpatialPlan {
             spaces: vec![make_spec(
@@ -517,29 +538,25 @@ mod tests {
         let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &features,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
-        let archetypes: Vec<&EntityArchetypeId> =
-            plan.entities.iter().map(|e| &e.archetype).collect();
         assert!(
-            archetypes.contains(&&EntityArchetypeId::from("skeleton")),
-            "hub should get skeletons, got: {:?}",
-            archetypes
+            plan.entities.is_empty(),
+            "hub room should have no structural entities (atmosphere system handles ambient entities), got: {:?}",
+            plan.entities
+                .iter()
+                .map(|e| &e.archetype)
+                .collect::<Vec<_>>()
         );
-        // Verify patrol zones are present for skeletons.
-        for entity in &plan.entities {
-            if entity.archetype == EntityArchetypeId::from("skeleton") {
-                assert!(
-                    entity.patrol_zone.is_some(),
-                    "skeletons should have patrol zones"
-                );
-                assert!(
-                    !entity.patrol_zone.as_ref().unwrap().is_empty(),
-                    "patrol zone should not be empty"
-                );
-            }
-        }
     }
 
     #[test]
@@ -564,7 +581,15 @@ mod tests {
         let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &features,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         let has_guardian = plan
@@ -616,7 +641,15 @@ mod tests {
         let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &features,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         let feature_set: HashSet<Point> = feature_cells.into_iter().collect();
@@ -651,7 +684,15 @@ mod tests {
         let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &features,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         assert!(
@@ -670,7 +711,7 @@ mod tests {
                 0,
                 NodeRole::Entry,
                 Some(SpaceArchetype::Vestibule),
-                // "barrels" would normally trigger the rat rule
+                // "barrels" and "food" no longer trigger entity rules (rats moved to atmosphere system)
                 &["barrels", "food"],
             )],
             links: vec![],
@@ -685,7 +726,15 @@ mod tests {
         let rules = default_entity_rules();
 
         let plan = SimpleEntityPlanner
-            .plan(&spatial, &geometry, &tiles, &features, &rules, &mut rng)
+            .plan(
+                &spatial,
+                &geometry,
+                &tiles,
+                &features,
+                &rules,
+                &std::collections::HashMap::new(),
+                &mut rng,
+            )
             .unwrap();
 
         assert!(
@@ -749,8 +798,15 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let rules = default_entity_rules();
 
-        let result =
-            SimpleEntityPlanner.plan(&spatial, &geometry, &map, &features, &rules, &mut rng);
+        let result = SimpleEntityPlanner.plan(
+            &spatial,
+            &geometry,
+            &map,
+            &features,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        );
         assert!(
             result.is_err(),
             "should error when required entity can't be placed"

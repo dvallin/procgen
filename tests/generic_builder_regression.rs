@@ -395,6 +395,10 @@ fn pipeline_tavern_all_seeds_succeed() {
 }
 
 /// Pipeline results should have non-empty features and entities for both scenarios.
+///
+/// Note: after cosmetic rules (barrels, torches) moved to the atmosphere system,
+/// some tavern seeds may produce no structural features.  The tavern assertion
+/// therefore only checks entities; atmosphere-driven features are applied later.
 #[test]
 fn pipeline_results_have_features_and_entities() {
     // Crypt
@@ -417,7 +421,8 @@ fn pipeline_results_have_features_and_entities() {
         );
     }
 
-    // Tavern
+    // Tavern — structural features may be empty for some seeds now that
+    // cosmetic barrel/torch rules live in the atmosphere system.
     for seed in 0..20u64 {
         let config = PipelineConfig {
             seed: Some(seed),
@@ -427,10 +432,7 @@ fn pipeline_results_have_features_and_entities() {
         let r = pipeline
             .run(&tavern_situation())
             .expect("tavern pipeline should succeed");
-        assert!(
-            !r.features.features.is_empty(),
-            "tavern seed {seed}: should have features"
-        );
+        // Features are allowed to be empty — atmosphere profiles add them later.
         assert!(
             !r.entities.entities.is_empty(),
             "tavern seed {seed}: should have entities"

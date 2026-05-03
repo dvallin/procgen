@@ -511,7 +511,9 @@ mod tests {
             archetype: Some(SpaceArchetype::Chamber),
             size_hint: SizeHint::Medium,
             style: RealizationStyle::RoomLike,
-            tags: vec![],
+            structural_tags: vec![],
+            atmosphere_tags: vec![],
+            motifs: vec![],
             label: None,
         }
     }

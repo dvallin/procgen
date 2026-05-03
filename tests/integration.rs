@@ -471,7 +471,14 @@ fn run_crypt_features() -> (
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_rules();
     let features = SimpleFeaturePlanner
-        .plan(&spatial, &geometry, &map, &rules, &mut rng)
+        .plan(
+            &spatial,
+            &geometry,
+            &map,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        )
         .unwrap();
     (spatial, geometry, map, features)
 }
@@ -494,7 +501,14 @@ fn run_tavern_features() -> (
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_rules();
     let features = SimpleFeaturePlanner
-        .plan(&spatial, &geometry, &map, &rules, &mut rng)
+        .plan(
+            &spatial,
+            &geometry,
+            &map,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        )
         .unwrap();
     (spatial, geometry, map, features)
 }
@@ -738,7 +752,9 @@ mod stress_tests {
                             id: SpaceId(i as u32),
                             origin: ScenarioNodeId(i as u32),
                             role: actual_role,
-                            tags: vec![],
+                            structural_tags: vec![],
+                            atmosphere_tags: vec![],
+                            motifs: vec![],
                             style: RealizationStyle::RoomLike,
                             kind: SpaceKind::Atomic(AtomicSpace {
                                 width: w,
@@ -973,7 +989,15 @@ fn run_crypt_entities() -> (
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_entity_rules();
     let entities = SimpleEntityPlanner
-        .plan(&spatial, &geometry, &map, &features, &rules, &mut rng)
+        .plan(
+            &spatial,
+            &geometry,
+            &map,
+            &features,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        )
         .unwrap();
     (spatial, geometry, map, features, entities)
 }
@@ -990,7 +1014,15 @@ fn run_tavern_entities() -> (
     let mut rng = StdRng::seed_from_u64(42);
     let rules = default_entity_rules();
     let entities = SimpleEntityPlanner
-        .plan(&spatial, &geometry, &map, &features, &rules, &mut rng)
+        .plan(
+            &spatial,
+            &geometry,
+            &map,
+            &features,
+            &rules,
+            &std::collections::HashMap::new(),
+            &mut rng,
+        )
         .unwrap();
     (spatial, geometry, map, features, entities)
 }
@@ -1291,6 +1323,7 @@ fn pipeline_with_custom_feature_rules_override() {
     let config = PipelineConfig {
         seed: Some(42),
         feature_rules: Some(custom_rules),
+        atmosphere_profiles: Some(vec![]),
         ..PipelineConfig::default()
     };
     let pipeline = Pipeline { config };
@@ -1313,6 +1346,7 @@ fn pipeline_with_empty_entity_rules_produces_no_entities() {
     let config = PipelineConfig {
         seed: Some(42),
         entity_rules: Some(vec![]),
+        atmosphere_profiles: Some(vec![]),
         ..PipelineConfig::default()
     };
     let pipeline = Pipeline { config };

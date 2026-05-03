@@ -11,17 +11,6 @@
     "tag_match": "main_goal"
   },
   {
-    "archetype": "skeleton",
-    "placement": "RandomFloor",
-    "min_count": 1,
-    "max_count": 3,
-    "behavior_tags": ["patrols"],
-    "patrol": true,
-    "role_match": "Hub",
-    "archetype_match": null,
-    "tag_match": null
-  },
-  {
     "archetype": "chest_mimic",
     "placement": {
       "NearFeature": "chest"
@@ -44,28 +33,6 @@
     "role_match": "Gate",
     "archetype_match": null,
     "tag_match": "locked"
-  },
-  {
-    "archetype": "rat",
-    "placement": "RandomFloor",
-    "min_count": 0,
-    "max_count": 2,
-    "behavior_tags": ["patrols"],
-    "patrol": true,
-    "role_match": null,
-    "archetype_match": null,
-    "tag_match": "barrels"
-  },
-  {
-    "archetype": "rat",
-    "placement": "RandomFloor",
-    "min_count": 0,
-    "max_count": 1,
-    "behavior_tags": ["patrols"],
-    "patrol": true,
-    "role_match": null,
-    "archetype_match": null,
-    "tag_match": "food"
   },
   {
     "archetype": "smuggler",

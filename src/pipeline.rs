@@ -11,6 +11,8 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use tracing::{debug, info, info_span, warn};
 
+use crate::atmosphere::apply::apply_atmosphere_influences;
+use crate::atmosphere::profile::AtmosphereProfile;
 use crate::entity::plan::{EntityPlan, EntityPlanError};
 use crate::entity::planner::{EntityPlanner, SimpleEntityPlanner};
 use crate::entity::rules::EntityRule;
@@ -31,11 +33,12 @@ use crate::spatial::planner::{SimpleSpatialPlanner, SpatialPlanError, SpatialPla
 use crate::tile::map::TileMap;
 use crate::tile::rasterize::{RasterizeError, Rasterizer, SimpleRasterizer};
 use crate::tile::registry::TileRegistry;
-use crate::tile::scatter::{TileScatterRule, apply_scatter};
+use crate::tile::scatter::scatter_room;
 use crate::validate::entity::{EntityValidationInput, EntityValidator};
 use crate::validate::feature::{FeatureValidationInput, FeatureValidator};
 use crate::validate::geometry::GeometryValidator;
 use crate::validate::{Severity, Validator};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // PipelineConfig + RelaxationStrategy
@@ -70,8 +73,12 @@ pub struct PipelineConfig {
     pub tile_registry: Option<TileRegistry>,
     /// Optional feature registry override. If `None`, uses the default built-in registry.
     pub feature_registry: Option<FeatureRegistry>,
-    /// Optional tile scatter rules override. If `None`, loads from the default asset path.
-    pub scatter_rules: Option<Vec<TileScatterRule>>,
+    /// Optional atmosphere profiles override. If `None`, loads from the default asset path.
+    pub atmosphere_profiles: Option<Vec<AtmosphereProfile>>,
+    /// Number of weighted samples to draw from each atmosphere palette per room.
+    /// Higher values produce denser, more varied atmosphere-driven content.
+    /// Default: 3.
+    pub atmosphere_sample_budget: usize,
 }
 
 impl Default for PipelineConfig {
@@ -84,7 +91,8 @@ impl Default for PipelineConfig {
             entity_rules: None,
             tile_registry: None,
             feature_registry: None,
-            scatter_rules: None,
+            atmosphere_profiles: None,
+            atmosphere_sample_budget: 3,
         }
     }
 }
@@ -295,50 +303,33 @@ impl Pipeline {
         let mut tiles = SimpleRasterizer.rasterize(&geometry, &registry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
 
-        // ── 4b. Tile scatter ───────────────────────────────────────────
-        let scatter_rules = match &self.config.scatter_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_tile_scatter_rules()
-                .expect("embedded tile scatter rules are valid JSON"),
-        };
-        if !scatter_rules.is_empty() {
-            info!(rules = scatter_rules.len(), "applying tile scatter");
-            apply_scatter(
-                &mut tiles,
-                &geometry,
-                &spatial,
-                &scatter_rules,
-                &registry,
-                &mut rng,
-            );
-        }
+        // ── 5. Atmosphere (scatter + per-room rules) ───────────────
+        let (per_room_feature_rules, per_room_entity_rules) =
+            self.apply_atmosphere(&spatial, &geometry, &mut tiles, &registry, &mut rng);
 
-        // ── Resolve rule sets ──────────────────────────────────────────
-        let feature_rules = match &self.config.feature_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_feature_rules()
-                .expect("embedded feature rules are valid JSON"),
-        };
-        let entity_rules = match &self.config.entity_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_entity_rules()
-                .expect("embedded entity rules are valid JSON"),
-        };
-
-        // ── 5. Feature planning + validation ───────────────────────────
+        // ── 6. Feature planning + validation ───────────────────────
         info!("planning features");
-        let features =
-            SimpleFeaturePlanner.plan(&spatial, &geometry, &tiles, &feature_rules, &mut rng)?;
+        let feature_rules = self.resolve_feature_rules();
+        let features = SimpleFeaturePlanner.plan(
+            &spatial,
+            &geometry,
+            &tiles,
+            &feature_rules,
+            &per_room_feature_rules,
+            &mut rng,
+        )?;
         self.validate_features(&features, &tiles, &geometry, &spatial)?;
 
-        // ── 6. Entity planning + validation ───────────────────────────
+        // ── 7. Entity planning + validation ────────────────────────
         info!("planning entities");
+        let entity_rules = self.resolve_entity_rules();
         let entities = SimpleEntityPlanner.plan(
             &spatial,
             &geometry,
             &tiles,
             &features,
             &entity_rules,
+            &per_room_entity_rules,
             &mut rng,
         )?;
         self.validate_entities(&entities, &features, &tiles, &geometry, &spatial)?;
@@ -497,6 +488,103 @@ impl Pipeline {
             })
         }
     }
+
+    /// Resolve feature rules from config or defaults.
+    fn resolve_feature_rules(&self) -> Vec<FeatureRule> {
+        match &self.config.feature_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_feature_rules()
+                .expect("embedded feature rules are valid JSON"),
+        }
+    }
+
+    /// Resolve entity rules from config or defaults.
+    fn resolve_entity_rules(&self) -> Vec<EntityRule> {
+        match &self.config.entity_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_entity_rules()
+                .expect("embedded entity rules are valid JSON"),
+        }
+    }
+
+    /// Apply atmosphere profiles: sample contributions per room, apply scatter
+    /// to tiles, and return per-room feature/entity rules for downstream planners.
+    fn apply_atmosphere(
+        &self,
+        spatial: &SpatialPlan,
+        geometry: &GeometryPlan,
+        tiles: &mut TileMap,
+        registry: &TileRegistry,
+        rng: &mut StdRng,
+    ) -> (
+        HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>>,
+        HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>>,
+    ) {
+        let atmosphere_profiles = match &self.config.atmosphere_profiles {
+            Some(profiles) => profiles.clone(),
+            None => crate::asset::load::load_default_atmosphere_profiles()
+                .expect("embedded atmosphere profiles are valid JSON"),
+        };
+
+        let mut per_room_feature_rules: HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>> =
+            HashMap::new();
+        let mut per_room_entity_rules: HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>> =
+            HashMap::new();
+
+        if atmosphere_profiles.is_empty() {
+            return (per_room_feature_rules, per_room_entity_rules);
+        }
+
+        info!(
+            profiles = atmosphere_profiles.len(),
+            "applying atmosphere profiles"
+        );
+
+        // Pass 1: sample atmosphere contributions for every room.
+        let mut per_room_scatter: HashMap<
+            crate::spatial::plan::SpaceId,
+            Vec<crate::tile::scatter::TileScatterRule>,
+        > = HashMap::new();
+
+        for spec in &spatial.spaces {
+            let contrib = apply_atmosphere_influences(
+                &atmosphere_profiles,
+                spec,
+                self.config.atmosphere_sample_budget,
+                rng,
+            );
+
+            if !contrib.scatter_rules.is_empty() {
+                per_room_scatter.insert(spec.id, contrib.scatter_rules);
+            }
+            if !contrib.feature_rules.is_empty() {
+                per_room_feature_rules.insert(spec.id, contrib.feature_rules);
+            }
+            if !contrib.entity_rules.is_empty() {
+                per_room_entity_rules.insert(spec.id, contrib.entity_rules);
+            }
+        }
+
+        // Pass 2: apply scatter rules per room (iterating geometry spaces
+        // to preserve the original RNG consumption order).
+        for placed in &geometry.spaces {
+            if let Some(rules) = per_room_scatter.get(&placed.space_id) {
+                scatter_room(tiles, placed.rect, rules, registry, rng);
+            }
+        }
+
+        let matched_rooms = per_room_scatter
+            .len()
+            .max(per_room_feature_rules.len())
+            .max(per_room_entity_rules.len());
+        info!(
+            matched_rooms = matched_rooms,
+            total_rooms = spatial.spaces.len(),
+            "atmosphere matching complete"
+        );
+
+        (per_room_feature_rules, per_room_entity_rules)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -542,7 +630,8 @@ mod tests {
                 entity_rules: None,
                 tile_registry: None,
                 feature_registry: None,
-                scatter_rules: None,
+                atmosphere_profiles: None,
+                atmosphere_sample_budget: 3,
             },
         };
         let base = PlacementConfig::default();
@@ -562,7 +651,8 @@ mod tests {
                 entity_rules: None,
                 tile_registry: None,
                 feature_registry: None,
-                scatter_rules: None,
+                atmosphere_profiles: None,
+                atmosphere_sample_budget: 3,
             },
         };
         let base = PlacementConfig {

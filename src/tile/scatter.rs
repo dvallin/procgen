@@ -1,8 +1,8 @@
 //! Tile scatter: replaces floor tiles within rooms based on tag-driven rules.
 //!
 //! Each [`TileScatterRule`] maps a room tag to a target tile and a density
-//! (fraction of floor tiles to replace). Rules are loaded from JSON
-//! (`assets/rules/tile_scatter.json`) or constructed programmatically.
+//! (fraction of floor tiles to replace). Scatter rules are produced by the
+//! atmosphere system or constructed programmatically.
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ pub fn apply_scatter(
         // Collect all matching scatter rules for this space's tags.
         let matching: Vec<&TileScatterRule> = rules
             .iter()
-            .filter(|rule| spec.tags.contains(&rule.match_tag))
+            .filter(|rule| spec.has_tag(&rule.match_tag))
             .collect();
 
         if matching.is_empty() {
@@ -130,6 +130,58 @@ pub fn apply_scatter(
     }
 }
 
+/// Apply scatter rules directly to a single room's interior.
+///
+/// This is the per-room variant used by the atmosphere system. Unlike
+/// [`apply_scatter`] which iterates all rooms in a geometry plan, this
+/// targets a single room identified by its rect.
+pub fn scatter_room(
+    map: &mut TileMap,
+    rect: crate::geometry::geom::Rect,
+    rules: &[TileScatterRule],
+    registry: &TileRegistry,
+    rng: &mut impl Rng,
+) {
+    let x_start = rect.x + 1;
+    let x_end = rect.x + rect.w - 1;
+    let y_start = rect.y + 1;
+    let y_end = rect.y + rect.h - 1;
+
+    for rule in rules {
+        let Some(target_id) = resolve_tile_name(registry, &rule.target_tile) else {
+            debug!(
+                target_tile = %rule.target_tile,
+                "scatter rule references unknown tile, skipping"
+            );
+            continue;
+        };
+
+        let target_walkable = registry.is_walkable(target_id);
+
+        for y in y_start..y_end {
+            for x in x_start..x_end {
+                if map.get(x, y) != Some(Tile::FLOOR) {
+                    continue;
+                }
+                if rng.r#gen::<f64>() >= rule.density {
+                    continue;
+                }
+                if !target_walkable {
+                    let p = Point { x, y };
+                    let all_neighbors_walkable = p
+                        .cardinals()
+                        .iter()
+                        .all(|n| map.get(n.x, n.y).map_or(false, |t| registry.is_walkable(t)));
+                    if !all_neighbors_walkable {
+                        continue;
+                    }
+                }
+                map.set(x, y, target_id);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,12 +210,16 @@ mod tests {
 
     /// Helper: create a minimal SpatialPlan with one space that has the given tags.
     fn make_spatial_plan(tags: Vec<Tag>) -> SpatialPlan {
+        use crate::spatial::plan::classify_tags;
+        let (structural, atmosphere) = classify_tags(&tags);
         SpatialPlan {
             spaces: vec![SpaceSpec {
                 id: SpaceId(0),
                 origin: ScenarioNodeId(0),
                 role: NodeRole::Hub,
-                tags,
+                structural_tags: structural,
+                atmosphere_tags: atmosphere,
+                motifs: vec![],
                 style: RealizationStyle::RoomLike,
                 kind: SpaceKind::Atomic(AtomicSpace {
                     width: 5,

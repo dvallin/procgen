@@ -297,12 +297,16 @@ mod tests {
     }
 
     fn make_spatial(role: NodeRole, tags: &[&str]) -> SpatialPlan {
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpatialPlan {
             spaces: vec![SpaceSpec {
                 id: SpaceId(0),
                 origin: ScenarioNodeId(0),
                 role,
-                tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+                structural_tags: structural,
+                atmosphere_tags: atmosphere,
+                motifs: vec![],
                 style: RealizationStyle::RoomLike,
                 kind: SpaceKind::Atomic(AtomicSpace {
                     width: 5,

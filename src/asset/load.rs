@@ -9,13 +9,13 @@
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
+use crate::atmosphere::profile::AtmosphereProfile;
 use crate::entity::rules::EntityRule;
 use crate::feature::registry::{FeatureProperties, FeatureRegistry};
 use crate::feature::rules::FeatureRule;
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::vocabulary::ThemeVocabulary;
 use crate::tile::registry::{TileProperties, TileRegistry};
-use crate::tile::scatter::TileScatterRule;
 
 // ─── Embedded defaults (compiled into the binary) ───────────────────────────
 
@@ -34,11 +34,11 @@ const EMBEDDED_THEME_VOCABULARIES: &str = include_str!("../../assets/vocabularie
 /// Default tile registry, embedded at compile time.
 const EMBEDDED_TILE_REGISTRY: &str = include_str!("../../assets/rules/tiles.json");
 
-/// Default tile scatter rules, embedded at compile time.
-const EMBEDDED_TILE_SCATTER_RULES: &str = include_str!("../../assets/rules/tile_scatter.json");
-
 /// Default feature type registry, embedded at compile time.
 const EMBEDDED_FEATURE_REGISTRY: &str = include_str!("../../assets/rules/feature_types.json");
+
+/// Default atmosphere profiles, embedded at compile time.
+const EMBEDDED_ATMOSPHERE_PROFILES: &str = include_str!("../../assets/rules/atmospheres.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -219,17 +219,6 @@ pub fn load_default_tile_registry() -> Result<TileRegistry, AssetLoadError> {
     Ok(registry)
 }
 
-/// Default file path for tile scatter rules, relative to the working directory.
-pub const DEFAULT_TILE_SCATTER_RULES_PATH: &str = "assets/rules/tile_scatter.json";
-
-/// Load the default tile scatter rules.
-///
-/// Tries `assets/rules/tile_scatter.json` on disk first, falls back to
-/// the compiled-in version if the file doesn't exist.
-pub fn load_default_tile_scatter_rules() -> Result<Vec<TileScatterRule>, AssetLoadError> {
-    load_rules_with_fallback(DEFAULT_TILE_SCATTER_RULES_PATH, EMBEDDED_TILE_SCATTER_RULES)
-}
-
 /// Default file path for the feature type registry, relative to the working directory.
 pub const DEFAULT_FEATURE_REGISTRY_PATH: &str = "assets/rules/feature_types.json";
 
@@ -242,6 +231,20 @@ pub fn load_default_feature_registry() -> Result<FeatureRegistry, AssetLoadError
     let props: Vec<FeatureProperties> =
         load_rules_with_fallback(DEFAULT_FEATURE_REGISTRY_PATH, EMBEDDED_FEATURE_REGISTRY)?;
     Ok(FeatureRegistry::from_properties(props))
+}
+
+/// Default file path for atmosphere profiles, relative to the working directory.
+pub const DEFAULT_ATMOSPHERE_PROFILES_PATH: &str = "assets/rules/atmospheres.json";
+
+/// Load the default atmosphere profiles.
+///
+/// Tries `assets/rules/atmospheres.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist.
+pub fn load_default_atmosphere_profiles() -> Result<Vec<AtmosphereProfile>, AssetLoadError> {
+    load_rules_with_fallback(
+        DEFAULT_ATMOSPHERE_PROFILES_PATH,
+        EMBEDDED_ATMOSPHERE_PROFILES,
+    )
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -258,7 +261,7 @@ mod tests {
     #[test]
     fn load_embedded_feature_rules_succeeds() {
         let rules = load_default_feature_rules().unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
 
         // Spot-check a known rule.
         let sarcophagus = rules
@@ -274,7 +277,7 @@ mod tests {
     #[test]
     fn load_embedded_entity_rules_succeeds() {
         let rules = load_default_entity_rules().unwrap();
-        assert_eq!(rules.len(), 7);
+        assert_eq!(rules.len(), 4);
 
         // Spot-check a known rule.
         let guardian = rules
@@ -329,7 +332,7 @@ mod tests {
         // load_rules_with_fallback should use it rather than the fallback.
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("assets/rules/features.json", "[]").unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
     }
 
     #[test]
@@ -337,7 +340,7 @@ mod tests {
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("nonexistent/path/features.json", EMBEDDED_FEATURE_RULES)
                 .unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
     }
 
     #[test]

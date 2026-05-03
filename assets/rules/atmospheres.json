@@ -1,0 +1,280 @@
+[
+  {
+    "name": "rocky_collapsed",
+    "match_tags": ["collapsed", "rocky"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "rubble", "density": 0.2, "weight": 3.0 }],
+    "features": [],
+    "entities": []
+  },
+  {
+    "name": "damp",
+    "match_tags": ["damp", "flooded"],
+    "priority": 0,
+    "scatter": [
+      { "target_tile": "water", "density": 0.15, "weight": 3.0 },
+      { "target_tile": "rubble", "density": 0.05, "weight": 1.0 }
+    ],
+    "features": [
+      {
+        "feature_type": "moss",
+        "strategy": "RandomFloor",
+        "max_count": 3,
+        "weight": 3.0
+      },
+      {
+        "feature_type": "fungus",
+        "strategy": "Corner",
+        "max_count": 2,
+        "weight": 1.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "rat",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 2.0
+      }
+    ]
+  },
+  {
+    "name": "overgrown",
+    "match_tags": ["overgrown", "natural"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "grass", "density": 0.25, "weight": 4.0 }],
+    "features": [
+      {
+        "feature_type": "vines",
+        "strategy": "WallAdjacent",
+        "max_count": 3,
+        "weight": 3.0
+      },
+      {
+        "feature_type": "fungus",
+        "strategy": "Corner",
+        "max_count": 2,
+        "weight": 1.5
+      },
+      {
+        "feature_type": "stalagmite",
+        "strategy": "RandomFloor",
+        "max_count": 1,
+        "weight": 0.5
+      }
+    ],
+    "entities": []
+  },
+  {
+    "name": "vast_echoing",
+    "match_tags": ["vast", "echoing", "cavern"],
+    "priority": 0,
+    "scatter": [
+      { "target_tile": "rubble", "density": 0.1, "weight": 2.0 },
+      { "target_tile": "water", "density": 0.08, "weight": 1.0 }
+    ],
+    "features": [
+      {
+        "feature_type": "stalagmite",
+        "strategy": "RandomFloor",
+        "max_count": 3,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "crystal",
+        "strategy": "Corner",
+        "max_count": 1,
+        "weight": 1.0
+      },
+      {
+        "feature_type": "fungus",
+        "strategy": "RandomFloor",
+        "max_count": 2,
+        "weight": 1.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "bat",
+        "placement": "RandomFloor",
+        "max_count": 3,
+        "weight": 3.0
+      },
+      {
+        "archetype": "cave_spider",
+        "placement": "RandomFloor",
+        "max_count": 1,
+        "weight": 1.0
+      }
+    ]
+  },
+  {
+    "name": "noble_sealed",
+    "match_tags": ["noble", "sealed"],
+    "priority": 1,
+    "scatter": [],
+    "features": [
+      {
+        "feature_type": "banner",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 3.0
+      },
+      {
+        "feature_type": "tapestry",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 2.0
+      },
+      {
+        "feature_type": "torch",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 2.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "skeleton_guardian",
+        "placement": "Center",
+        "max_count": 1,
+        "weight": 2.0
+      },
+      {
+        "archetype": "skeleton",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 3.0
+      }
+    ]
+  },
+  {
+    "name": "storage_cellar",
+    "match_tags": ["barrels", "crates", "storage", "food"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "rubble", "density": 0.05, "weight": 1.0 }],
+    "features": [
+      {
+        "feature_type": "barrel",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "shelf",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 2.0
+      },
+      {
+        "feature_type": "chest",
+        "strategy": "Corner",
+        "max_count": 1,
+        "weight": 1.0
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "rat",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 2.0
+      },
+      {
+        "archetype": "smuggler",
+        "placement": { "NearFeature": "chest" },
+        "max_count": 1,
+        "weight": 0.5
+      }
+    ]
+  },
+  {
+    "name": "dark_stone",
+    "match_tags": ["dark", "stone"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "rubble", "density": 0.08, "weight": 2.0 }],
+    "features": [
+      {
+        "feature_type": "torch",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 3.0
+      },
+      {
+        "feature_type": "moss",
+        "strategy": "Corner",
+        "max_count": 1,
+        "weight": 1.0
+      }
+    ],
+    "entities": []
+  },
+  {
+    "name": "tomb_ancient",
+    "match_tags": ["bones", "ancient", "burial"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "rubble", "density": 0.1, "weight": 2.0 }],
+    "features": [
+      {
+        "feature_type": "sarcophagus",
+        "strategy": "Center",
+        "max_count": 1,
+        "weight": 1.5
+      },
+      {
+        "feature_type": "torch",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 2.5
+      },
+      {
+        "feature_type": "banner",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 1.0
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "skeleton",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 3.0
+      }
+    ]
+  },
+  {
+    "name": "sacred_space",
+    "match_tags": ["sacred", "religious"],
+    "priority": 0,
+    "scatter": [],
+    "features": [
+      {
+        "feature_type": "altar",
+        "strategy": "Center",
+        "max_count": 1,
+        "weight": 3.0
+      },
+      {
+        "feature_type": "torch",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 2.5
+      },
+      {
+        "feature_type": "banner",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 2.0
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "skeleton_guardian",
+        "placement": "Center",
+        "max_count": 1,
+        "weight": 1.5
+      }
+    ]
+  }
+]

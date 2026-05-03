@@ -1,6 +1,7 @@
 pub mod tag;
 
 pub mod asset;
+pub mod atmosphere;
 pub mod demo;
 pub mod entity;
 pub mod feature;

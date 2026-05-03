@@ -47,7 +47,7 @@ impl FeatureRule {
             return false;
         }
         if let Some(ref tag) = self.match_tag
-            && !spec.tags.contains(tag)
+            && !spec.has_tag(tag)
         {
             return false;
         }
@@ -79,11 +79,16 @@ mod tests {
 
     /// Helper: build a minimal SpaceSpec with the given role, archetype, and tags.
     fn make_spec(role: NodeRole, archetype: Option<SpaceArchetype>, tags: &[&str]) -> SpaceSpec {
+        use crate::spatial::plan::classify_tags;
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(0),
             origin: ScenarioNodeId(0),
             role,
-            tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -96,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn crypt_vault_gets_sarcophagus_and_torches() {
+    fn crypt_vault_gets_sarcophagus() {
         let spec = make_spec(NodeRole::Goal, Some(SpaceArchetype::Vault), &["main_goal"]);
         let rules = default_rules();
         let matched = matching_rules(&rules, &spec);
@@ -107,20 +112,11 @@ mod tests {
             "vault with main_goal should get a sarcophagus, got: {:?}",
             types
         );
-        assert!(
-            types.contains(&&FeatureType::from("torch")),
-            "vault with main_goal should get torches, got: {:?}",
-            types
-        );
     }
 
     #[test]
-    fn tavern_hub_gets_table_and_barrels() {
-        let spec = make_spec(
-            NodeRole::Hub,
-            Some(SpaceArchetype::Hall),
-            &["barrels", "damp"],
-        );
+    fn tavern_hub_gets_table() {
+        let spec = make_spec(NodeRole::Hub, Some(SpaceArchetype::Hall), &["noble"]);
         let rules = default_rules();
         let matched = matching_rules(&rules, &spec);
 
@@ -128,34 +124,6 @@ mod tests {
         assert!(
             types.contains(&&FeatureType::from(Feature::TABLE)),
             "hub should get a table, got: {:?}",
-            types
-        );
-        // Should match both the Hub barrel rule AND the "barrels" tag rule.
-        let barrel_count = types
-            .iter()
-            .filter(|t| ***t == FeatureType::from(Feature::BARREL))
-            .count();
-        assert!(
-            barrel_count >= 2,
-            "hub with 'barrels' tag should match ≥2 barrel rules, got: {}",
-            barrel_count
-        );
-    }
-
-    #[test]
-    fn pantry_gets_shelf_from_food_tag() {
-        let spec = make_spec(
-            NodeRole::Branch,
-            Some(SpaceArchetype::Chamber),
-            &["optional", "food"],
-        );
-        let rules = default_rules();
-        let matched = matching_rules(&rules, &spec);
-
-        let types: Vec<&FeatureType> = matched.iter().map(|r| &r.feature_type).collect();
-        assert!(
-            types.contains(&&FeatureType::from(Feature::SHELF)),
-            "room with 'food' tag should get a shelf, got: {:?}",
             types
         );
     }
