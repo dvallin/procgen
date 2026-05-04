@@ -2,7 +2,7 @@ use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
 use procgen::geometry::geom::Point;
-use procgen::geometry::planner::{GeometryPlanner, ColumnGeometryPlanner};
+use procgen::geometry::planner::{ColumnGeometryPlanner, GeometryPlanner};
 use procgen::intent::builder::IntentBuilder;
 use procgen::intent::generic_builder::GenericIntentBuilder;
 use procgen::intent::map_intent::MapIntent;
@@ -2500,4 +2500,295 @@ mod random_rules_tests {
             }
         }
     }
+}
+
+// ============================================================
+// Phase 5.2: Pattern Composition — medium-scale integration tests
+// ============================================================
+
+/// Helper: run full pipeline with expansion budget, returning PipelineResult.
+fn run_composed_pipeline(
+    situation: &procgen::situation::SituationContext,
+    budget: u32,
+    seed: u64,
+) -> procgen::pipeline::PipelineResult {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(seed),
+        expansion_budget: Some(budget),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    pipeline
+        .run(situation)
+        .expect("composed pipeline should succeed")
+}
+
+#[test]
+fn composition_branching_exploration_produces_larger_graph() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    // branching_exploration has 2 expandable slots (branch_a, branch_b).
+    // With budget=2, at least some seeds should produce expansions.
+    let situation = SituationContext::new(vec![
+        Tag::from("exploration"),
+        Tag::from("sprawling"),
+        Tag::from("ruins"),
+    ])
+    .with_binding("theme", "undead_nobility")
+    .with_binding("pattern", "branching_exploration");
+
+    let mut max_rooms = 0;
+    let mut expanded_any = false;
+
+    for seed in 0..30 {
+        let result = run_composed_pipeline(&situation, 2, seed);
+        let room_count = result.geometry.spaces.len();
+        max_rooms = max_rooms.max(room_count);
+        if room_count > 7 {
+            expanded_any = true;
+        }
+    }
+
+    assert!(
+        expanded_any,
+        "with budget=2, at least one seed should produce >7 rooms, max was {}",
+        max_rooms
+    );
+}
+
+#[test]
+fn composition_medium_scale_map_is_connected() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    let situation = SituationContext::new(vec![
+        Tag::from("exploration"),
+        Tag::from("sprawling"),
+        Tag::from("cavern"),
+    ])
+    .with_binding("theme", "undead_nobility")
+    .with_binding("pattern", "branching_exploration");
+
+    // Run several seeds with composition budget.
+    for seed in 0..20 {
+        let result = run_composed_pipeline(&situation, 2, seed);
+        let map = &result.tiles;
+
+        let start = (0..map.height as i32)
+            .flat_map(|y| (0..map.width as i32).map(move |x| Point { x, y }))
+            .find(|p| map.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+            .expect("map should have at least one walkable tile");
+
+        let reached = map.flood_fill(start, |t| t.is_walkable());
+        let total_walkable = map.tiles.iter().filter(|t| t.is_walkable()).count();
+
+        assert_eq!(
+            reached.len(),
+            total_walkable,
+            "seed {}: composed map not fully connected: reached {} of {} walkable tiles (rooms={})",
+            seed,
+            reached.len(),
+            total_walkable,
+            result.geometry.spaces.len()
+        );
+    }
+}
+
+#[test]
+fn composition_no_overlapping_rooms() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    let situation = SituationContext::new(vec![Tag::from("exploration"), Tag::from("sprawling")])
+        .with_binding("theme", "undead_nobility")
+        .with_binding("pattern", "branching_exploration");
+
+    for seed in 0..20 {
+        let result = run_composed_pipeline(&situation, 2, seed);
+        let spaces = &result.geometry.spaces;
+
+        for i in 0..spaces.len() {
+            for j in (i + 1)..spaces.len() {
+                assert!(
+                    !spaces[i].rect.overlaps(&spaces[j].rect),
+                    "seed {}: rooms {} and {} overlap",
+                    seed,
+                    i,
+                    j
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn composition_annotations_include_composed_rooms() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    let situation = SituationContext::new(vec![Tag::from("exploration"), Tag::from("sprawling")])
+        .with_binding("theme", "undead_nobility")
+        .with_binding("pattern", "branching_exploration");
+
+    // Find a seed that actually produced an expansion (namespaced keys).
+    let mut found_composed = false;
+    for seed in 0..50 {
+        let result = run_composed_pipeline(&situation, 2, seed);
+
+        // Annotations should be present for all rooms.
+        assert_eq!(
+            result.annotations.len(),
+            result.geometry.spaces.len(),
+            "seed {}: annotation count should match room count",
+            seed
+        );
+
+        // Check if any node in the intent graph has a namespaced key (dot-separated).
+        // This indicates composition happened.
+        if result
+            .intent
+            .structural_graph
+            .nodes
+            .iter()
+            .any(|n| n.key.contains('.'))
+        {
+            found_composed = true;
+            // Verify annotations have valid geometry references.
+            for ann in &result.annotations {
+                assert!(
+                    ann.rect.w > 0 && ann.rect.h > 0,
+                    "seed {}: annotation for room {} has zero-size rect",
+                    seed,
+                    ann.space_id.0
+                );
+            }
+            break;
+        }
+    }
+    // It's acceptable if no seed produced composition (60% probability per slot),
+    // but with 50 seeds and 2 expandable slots it's very likely.
+    // If this test is flaky, increase seed range.
+    assert!(
+        found_composed,
+        "expected at least one seed to produce a composed graph across 50 attempts"
+    );
+}
+
+#[test]
+fn composition_hub_and_spoke_expands_spoke() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    // hub_and_spoke has spoke_1 as expandable.
+    let situation = SituationContext::new(vec![Tag::from("tavern"), Tag::from("dock_district")])
+        .with_binding("theme", "urban_underground")
+        .with_binding("pattern", "hub_and_spoke");
+
+    let mut expanded_any = false;
+    for seed in 0..30 {
+        let result = run_composed_pipeline(&situation, 1, seed);
+        // hub_and_spoke normally has 3-6 rooms. If spoke_1 expanded, we get more.
+        if result.geometry.spaces.len() > 6 {
+            expanded_any = true;
+
+            // Verify connectivity.
+            let map = &result.tiles;
+            let start = (0..map.height as i32)
+                .flat_map(|y| (0..map.width as i32).map(move |x| Point { x, y }))
+                .find(|p| map.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+                .expect("map should have at least one walkable tile");
+
+            let reached = map.flood_fill(start, |t| t.is_walkable());
+            let total_walkable = map.tiles.iter().filter(|t| t.is_walkable()).count();
+            assert_eq!(
+                reached.len(),
+                total_walkable,
+                "seed {}: expanded hub_and_spoke not fully connected",
+                seed
+            );
+            break;
+        }
+    }
+    assert!(
+        expanded_any,
+        "with budget=1 on hub_and_spoke, expected at least one expansion across 30 seeds"
+    );
+}
+
+#[test]
+fn composition_budget_zero_matches_original_behavior() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    // With budget=0, the composed pipeline should produce the same result
+    // as the original (no expansion). Verify by checking node count ranges
+    // match the original pattern sizes.
+    let situation = build_crypt_situation();
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        expansion_budget: Some(0),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline.run(&situation).expect("should succeed");
+
+    // lock_and_key has 4 required + 2 optional slots = 4-6 rooms.
+    let room_count = result.geometry.spaces.len();
+    assert!(
+        room_count >= 4 && room_count <= 6,
+        "budget=0 crypt should have 4-6 rooms, got {}",
+        room_count
+    );
+}
+
+#[test]
+fn composition_produces_8_to_15_rooms_at_medium_scale() {
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    // This is the key acceptance criterion for 5.2:
+    // Composed patterns should produce 8-15 node graphs for medium-scale maps.
+    let situation = SituationContext::new(vec![
+        Tag::from("exploration"),
+        Tag::from("sprawling"),
+        Tag::from("ruins"),
+    ])
+    .with_binding("theme", "undead_nobility")
+    .with_binding("pattern", "branching_exploration");
+
+    let mut found_medium_scale = false;
+    for seed in 0..100 {
+        let result = run_composed_pipeline(&situation, 2, seed);
+        let room_count = result.geometry.spaces.len();
+        if room_count >= 8 && room_count <= 15 {
+            found_medium_scale = true;
+
+            // Verify the full map is valid.
+            let map = &result.tiles;
+            assert!(map.width > 0 && map.height > 0);
+
+            // Verify connectivity.
+            let start = (0..map.height as i32)
+                .flat_map(|y| (0..map.width as i32).map(move |x| Point { x, y }))
+                .find(|p| map.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+                .expect("map should have at least one walkable tile");
+            let reached = map.flood_fill(start, |t| t.is_walkable());
+            let total_walkable = map.tiles.iter().filter(|t| t.is_walkable()).count();
+            assert_eq!(
+                reached.len(),
+                total_walkable,
+                "seed {}: medium-scale composed map ({} rooms) not fully connected",
+                seed,
+                room_count
+            );
+            break;
+        }
+    }
+    assert!(
+        found_medium_scale,
+        "with budget=2 on branching_exploration, expected at least one seed to produce 8-15 rooms across 100 attempts"
+    );
 }

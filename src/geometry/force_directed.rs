@@ -13,12 +13,16 @@ use std::collections::{HashMap, HashSet};
 use rand::Rng;
 use tracing::{debug, info, info_span, trace};
 
+use crate::geometry::common::{
+    apply_shape_refinement, build_adjacency, find_bfs_root, get_space_dimensions,
+    normalize_positions,
+};
 use crate::geometry::geom::*;
 use crate::geometry::planner::{GeometryPlanError, GeometryPlanner, PlacementConfig};
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
-use crate::geometry::shape::select_shape_refinement;
+#[cfg(test)]
 use crate::intent::map_intent::LocationKind;
-use crate::spatial::plan::{SpaceId, SpaceKind, SpatialConstraint, SpatialPlan};
+use crate::spatial::plan::{SpaceId, SpatialConstraint, SpatialPlan};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -177,212 +181,25 @@ impl ForceDirectedGeometryPlanner {
         let ids: Vec<SpaceId> = positions.keys().copied().collect();
         let mut damping = self.config.damping;
 
-        // Log initial state
-        {
-            let mut total_edge_dist = 0.0;
-            let mut edge_count = 0;
-            for &(id_a, id_b) in edges {
-                let (ax, ay) = positions[&id_a];
-                let (bx, by) = positions[&id_b];
-                let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
-                total_edge_dist += dist;
-                edge_count += 1;
-            }
-            let avg_edge = if edge_count > 0 {
-                total_edge_dist / edge_count as f64
-            } else {
-                0.0
-            };
-            debug!(
-                avg_initial_edge_dist = format!("{:.1}", avg_edge),
-                nodes = ids.len(),
-                edges = edge_count,
-                "simulation initial state"
-            );
-        }
+        self.log_initial_state(positions, edges);
 
         for iter in 0..self.config.iterations {
-            let mut forces: HashMap<SpaceId, (f64, f64)> = HashMap::new();
-            for &id in &ids {
-                forces.insert(id, (0.0, 0.0));
-            }
+            let mut forces = self.init_forces(&ids);
 
-            // ── Repulsion: all pairs push apart (global, falls off with d²) ──
-            for i in 0..ids.len() {
-                for j in (i + 1)..ids.len() {
-                    let id_a = ids[i];
-                    let id_b = ids[j];
+            self.apply_repulsion(&ids, positions, dimensions, constraints, &mut forces);
+            self.apply_attraction(edges, positions, dimensions, &mut forces);
+            self.apply_central_gravity(positions, constraints, &mut forces);
+            self.apply_perimeter_push(positions, constraints, &mut forces);
 
-                    let (ax, ay) = positions[&id_a];
-                    let (bx, by) = positions[&id_b];
+            let max_displacement = self.integrate_forces(&ids, positions, &forces, damping);
 
-                    let dx = bx - ax;
-                    let dy = by - ay;
-                    let dist_sq = dx * dx + dy * dy;
-
-                    // Minimum distance based on room sizes to avoid division near zero
-                    let (wa, ha) = dimensions[&id_a];
-                    let (wb, hb) = dimensions[&id_b];
-                    let min_dist = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
-                    let min_dist_sq = (min_dist * 0.5).powi(2);
-                    let effective_dist_sq = dist_sq.max(min_dist_sq);
-
-                    // Extra repulsion for separated pairs
-                    let repulsion_mult = if constraints.separated_pairs.contains(&(id_a, id_b))
-                        || constraints.separated_pairs.contains(&(id_b, id_a))
-                    {
-                        5.0
-                    } else {
-                        1.0
-                    };
-
-                    let force_mag =
-                        self.config.repulsion_strength * repulsion_mult / effective_dist_sq;
-
-                    let dist = effective_dist_sq.sqrt();
-                    let fx = force_mag * dx / dist;
-                    let fy = force_mag * dy / dist;
-
-                    // a is pushed away from b (negative direction)
-                    forces.get_mut(&id_a).unwrap().0 -= fx;
-                    forces.get_mut(&id_a).unwrap().1 -= fy;
-                    // b is pushed away from a (positive direction)
-                    forces.get_mut(&id_b).unwrap().0 += fx;
-                    forces.get_mut(&id_b).unwrap().1 += fy;
-                }
-            }
-
-            // ── Attraction: connected pairs pull together ──
-            for &(id_a, id_b) in edges {
-                let (ax, ay) = positions[&id_a];
-                let (bx, by) = positions[&id_b];
-
-                let dx = bx - ax;
-                let dy = by - ay;
-                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-
-                // Compute per-pair ideal center-to-center distance based on room sizes.
-                let (wa, ha) = dimensions[&id_a];
-                let (wb, hb) = dimensions[&id_b];
-                let avg_size = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
-                let ideal_dist = avg_size + self.config.ideal_spacing;
-
-                // Spring force: pull toward ideal distance
-                let displacement = dist - ideal_dist;
-                let force_mag = self.config.attraction_strength * displacement;
-
-                let fx = force_mag * dx / dist;
-                let fy = force_mag * dy / dist;
-
-                // a is pulled toward b
-                forces.get_mut(&id_a).unwrap().0 += fx;
-                forces.get_mut(&id_a).unwrap().1 += fy;
-                // b is pulled toward a
-                forces.get_mut(&id_b).unwrap().0 -= fx;
-                forces.get_mut(&id_b).unwrap().1 -= fy;
-            }
-
-            // ── Central gravity for PreferCentral nodes ──
-            if !constraints.central_spaces.is_empty() {
-                // Compute centroid
-                let n = positions.len() as f64;
-                let (cx, cy) = positions
-                    .values()
-                    .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
-
-                for &id in &constraints.central_spaces {
-                    if let Some((px, py)) = positions.get(&id) {
-                        let dx = cx - px;
-                        let dy = cy - py;
-                        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-                        let force_mag = 0.5 * dist; // Gentle pull toward center
-                        let fx = force_mag * dx / dist;
-                        let fy = force_mag * dy / dist;
-                        forces.get_mut(&id).unwrap().0 += fx;
-                        forces.get_mut(&id).unwrap().1 += fy;
-                    }
-                }
-            }
-
-            // ── Perimeter push for PreferPerimeter nodes ──
-            if !constraints.perimeter_spaces.is_empty() {
-                let n = positions.len() as f64;
-                let (cx, cy) = positions
-                    .values()
-                    .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
-
-                for &id in &constraints.perimeter_spaces {
-                    if let Some((px, py)) = positions.get(&id) {
-                        let dx = px - cx;
-                        let dy = py - cy;
-                        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-                        // Push away from center
-                        let force_mag = 0.8;
-                        let fx = force_mag * dx / dist;
-                        let fy = force_mag * dy / dist;
-                        forces.get_mut(&id).unwrap().0 += fx;
-                        forces.get_mut(&id).unwrap().1 += fy;
-                    }
-                }
-            }
-
-            // ── Apply forces with damping and max force clamping ──
-            let mut max_displacement = 0.0f64;
-            for &id in &ids {
-                let (fx, fy) = forces[&id];
-                let mag = (fx * fx + fy * fy).sqrt();
-                let (clamped_fx, clamped_fy) = if mag > self.config.max_force {
-                    let scale = self.config.max_force / mag;
-                    (fx * scale, fy * scale)
-                } else {
-                    (fx, fy)
-                };
-
-                let dx = clamped_fx * damping;
-                let dy = clamped_fy * damping;
-
-                let pos = positions.get_mut(&id).unwrap();
-                pos.0 += dx;
-                pos.1 += dy;
-
-                max_displacement = max_displacement.max((dx * dx + dy * dy).sqrt());
-            }
-
-            // Cool down
             damping *= self.config.cooling;
 
-            // Periodic logging
-            if iter % 50 == 0 || iter == self.config.iterations - 1 {
-                let mut total_edge_dist = 0.0;
-                let mut max_edge_dist = 0.0f64;
-                let mut edge_count = 0;
-                for &(id_a, id_b) in edges {
-                    let (ax, ay) = positions[&id_a];
-                    let (bx, by) = positions[&id_b];
-                    let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
-                    total_edge_dist += dist;
-                    max_edge_dist = max_edge_dist.max(dist);
-                    edge_count += 1;
-                }
-                let avg_edge = if edge_count > 0 {
-                    total_edge_dist / edge_count as f64
-                } else {
-                    0.0
-                };
-                trace!(
-                    iter = iter,
-                    max_disp = format!("{:.2}", max_displacement),
-                    damping = format!("{:.3}", damping),
-                    avg_edge_dist = format!("{:.1}", avg_edge),
-                    max_edge_dist = format!("{:.1}", max_edge_dist),
-                    "simulation progress"
-                );
-            }
+            self.log_progress(iter, max_displacement, damping, positions, edges);
 
-            // Early termination if system has settled
             if max_displacement < 0.1 {
                 debug!(
-                    iter = iter,
+                    iter,
                     max_displacement = format!("{:.3}", max_displacement),
                     "simulation converged early"
                 );
@@ -390,40 +207,303 @@ impl ForceDirectedGeometryPlanner {
             }
         }
 
-        // Final edge distance summary
-        {
-            let mut min_edge = f64::MAX;
-            let mut max_edge = 0.0f64;
-            let mut total_edge = 0.0;
-            let mut count = 0;
-            for &(id_a, id_b) in edges {
+        self.log_final_state(positions, edges, dimensions);
+    }
+
+    /// Create a zeroed force map for all space ids.
+    fn init_forces(&self, ids: &[SpaceId]) -> HashMap<SpaceId, (f64, f64)> {
+        ids.iter().map(|&id| (id, (0.0, 0.0))).collect()
+    }
+
+    /// N² repulsion: all pairs push apart (global, falls off with d²).
+    fn apply_repulsion(
+        &self,
+        ids: &[SpaceId],
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        dimensions: &HashMap<SpaceId, (i32, i32)>,
+        constraints: &ConstraintInfo,
+        forces: &mut HashMap<SpaceId, (f64, f64)>,
+    ) {
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                let id_a = ids[i];
+                let id_b = ids[j];
+
                 let (ax, ay) = positions[&id_a];
                 let (bx, by) = positions[&id_b];
-                let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+
+                let dx = bx - ax;
+                let dy = by - ay;
+                let dist_sq = dx * dx + dy * dy;
+
+                // Minimum distance based on room sizes to avoid division near zero
                 let (wa, ha) = dimensions[&id_a];
                 let (wb, hb) = dimensions[&id_b];
-                let avg_size = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
-                let ideal = avg_size + self.config.ideal_spacing;
-                trace!(
-                    edge = format!("{}->{}", id_a.0, id_b.0),
-                    dist = format!("{:.1}", dist),
-                    ideal = format!("{:.1}", ideal),
-                    delta = format!("{:+.1}", dist - ideal),
-                    "edge distance"
-                );
-                min_edge = min_edge.min(dist);
-                max_edge = max_edge.max(dist);
-                total_edge += dist;
-                count += 1;
+                let min_dist = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
+                let min_dist_sq = (min_dist * 0.5).powi(2);
+                let effective_dist_sq = dist_sq.max(min_dist_sq);
+
+                // Extra repulsion for separated pairs
+                let repulsion_mult = if constraints.separated_pairs.contains(&(id_a, id_b))
+                    || constraints.separated_pairs.contains(&(id_b, id_a))
+                {
+                    5.0
+                } else {
+                    1.0
+                };
+
+                let force_mag = self.config.repulsion_strength * repulsion_mult / effective_dist_sq;
+
+                let dist = effective_dist_sq.sqrt();
+                let fx = force_mag * dx / dist;
+                let fy = force_mag * dy / dist;
+
+                // a is pushed away from b (negative direction)
+                forces.get_mut(&id_a).unwrap().0 -= fx;
+                forces.get_mut(&id_a).unwrap().1 -= fy;
+                // b is pushed away from a (positive direction)
+                forces.get_mut(&id_b).unwrap().0 += fx;
+                forces.get_mut(&id_b).unwrap().1 += fy;
             }
-            if count > 0 {
-                debug!(
-                    avg_edge_dist = format!("{:.1}", total_edge / count as f64),
-                    min_edge_dist = format!("{:.1}", min_edge),
-                    max_edge_dist = format!("{:.1}", max_edge),
-                    "simulation complete"
-                );
+        }
+    }
+
+    /// Connected pairs pull together via spring force toward ideal distance.
+    fn apply_attraction(
+        &self,
+        edges: &HashSet<(SpaceId, SpaceId)>,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        dimensions: &HashMap<SpaceId, (i32, i32)>,
+        forces: &mut HashMap<SpaceId, (f64, f64)>,
+    ) {
+        for &(id_a, id_b) in edges {
+            let (ax, ay) = positions[&id_a];
+            let (bx, by) = positions[&id_b];
+
+            let dx = bx - ax;
+            let dy = by - ay;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+
+            // Compute per-pair ideal center-to-center distance based on room sizes.
+            let (wa, ha) = dimensions[&id_a];
+            let (wb, hb) = dimensions[&id_b];
+            let avg_size = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
+            let ideal_dist = avg_size + self.config.ideal_spacing;
+
+            // Spring force: pull toward ideal distance
+            let displacement = dist - ideal_dist;
+            let force_mag = self.config.attraction_strength * displacement;
+
+            let fx = force_mag * dx / dist;
+            let fy = force_mag * dy / dist;
+
+            // a is pulled toward b
+            forces.get_mut(&id_a).unwrap().0 += fx;
+            forces.get_mut(&id_a).unwrap().1 += fy;
+            // b is pulled toward a
+            forces.get_mut(&id_b).unwrap().0 -= fx;
+            forces.get_mut(&id_b).unwrap().1 -= fy;
+        }
+    }
+
+    /// Gentle pull toward centroid for PreferCentral nodes.
+    fn apply_central_gravity(
+        &self,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        constraints: &ConstraintInfo,
+        forces: &mut HashMap<SpaceId, (f64, f64)>,
+    ) {
+        if constraints.central_spaces.is_empty() {
+            return;
+        }
+
+        // Compute centroid
+        let n = positions.len() as f64;
+        let (cx, cy) = positions
+            .values()
+            .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
+
+        for &id in &constraints.central_spaces {
+            if let Some((px, py)) = positions.get(&id) {
+                let dx = cx - px;
+                let dy = cy - py;
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+                let force_mag = 0.5 * dist; // Gentle pull toward center
+                let fx = force_mag * dx / dist;
+                let fy = force_mag * dy / dist;
+                forces.get_mut(&id).unwrap().0 += fx;
+                forces.get_mut(&id).unwrap().1 += fy;
             }
+        }
+    }
+
+    /// Push PreferPerimeter nodes away from centroid.
+    fn apply_perimeter_push(
+        &self,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        constraints: &ConstraintInfo,
+        forces: &mut HashMap<SpaceId, (f64, f64)>,
+    ) {
+        if constraints.perimeter_spaces.is_empty() {
+            return;
+        }
+
+        let n = positions.len() as f64;
+        let (cx, cy) = positions
+            .values()
+            .fold((0.0, 0.0), |(sx, sy), &(x, y)| (sx + x / n, sy + y / n));
+
+        for &id in &constraints.perimeter_spaces {
+            if let Some((px, py)) = positions.get(&id) {
+                let dx = px - cx;
+                let dy = py - cy;
+                let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+                // Push away from center
+                let force_mag = 0.8;
+                let fx = force_mag * dx / dist;
+                let fy = force_mag * dy / dist;
+                forces.get_mut(&id).unwrap().0 += fx;
+                forces.get_mut(&id).unwrap().1 += fy;
+            }
+        }
+    }
+
+    /// Apply forces with clamping and damping, return max displacement.
+    fn integrate_forces(
+        &self,
+        ids: &[SpaceId],
+        positions: &mut HashMap<SpaceId, (f64, f64)>,
+        forces: &HashMap<SpaceId, (f64, f64)>,
+        damping: f64,
+    ) -> f64 {
+        let mut max_displacement = 0.0f64;
+        for &id in ids {
+            let (fx, fy) = forces[&id];
+            let mag = (fx * fx + fy * fy).sqrt();
+            let (clamped_fx, clamped_fy) = if mag > self.config.max_force {
+                let scale = self.config.max_force / mag;
+                (fx * scale, fy * scale)
+            } else {
+                (fx, fy)
+            };
+
+            let dx = clamped_fx * damping;
+            let dy = clamped_fy * damping;
+
+            let pos = positions.get_mut(&id).unwrap();
+            pos.0 += dx;
+            pos.1 += dy;
+
+            max_displacement = max_displacement.max((dx * dx + dy * dy).sqrt());
+        }
+        max_displacement
+    }
+
+    /// Log simulation initial state (average edge distance).
+    fn log_initial_state(
+        &self,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        edges: &HashSet<(SpaceId, SpaceId)>,
+    ) {
+        let mut total_edge_dist = 0.0;
+        let mut edge_count = 0;
+        for &(id_a, id_b) in edges {
+            let (ax, ay) = positions[&id_a];
+            let (bx, by) = positions[&id_b];
+            let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+            total_edge_dist += dist;
+            edge_count += 1;
+        }
+        let avg_edge = if edge_count > 0 {
+            total_edge_dist / edge_count as f64
+        } else {
+            0.0
+        };
+        debug!(
+            avg_initial_edge_dist = format!("{:.1}", avg_edge),
+            nodes = positions.len(),
+            edges = edge_count,
+            "simulation initial state"
+        );
+    }
+
+    /// Log periodic simulation progress (every 50 iterations and at the end).
+    fn log_progress(
+        &self,
+        iter: u32,
+        max_displacement: f64,
+        damping: f64,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        edges: &HashSet<(SpaceId, SpaceId)>,
+    ) {
+        if iter % 50 != 0 && iter != self.config.iterations - 1 {
+            return;
+        }
+
+        let mut total_edge_dist = 0.0;
+        let mut max_edge_dist = 0.0f64;
+        let mut edge_count = 0;
+        for &(id_a, id_b) in edges {
+            let (ax, ay) = positions[&id_a];
+            let (bx, by) = positions[&id_b];
+            let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+            total_edge_dist += dist;
+            max_edge_dist = max_edge_dist.max(dist);
+            edge_count += 1;
+        }
+        let avg_edge = if edge_count > 0 {
+            total_edge_dist / edge_count as f64
+        } else {
+            0.0
+        };
+        trace!(
+            iter = iter,
+            max_disp = format!("{:.2}", max_displacement),
+            damping = format!("{:.3}", damping),
+            avg_edge_dist = format!("{:.1}", avg_edge),
+            max_edge_dist = format!("{:.1}", max_edge_dist),
+            "simulation progress"
+        );
+    }
+
+    /// Log final edge distance summary.
+    fn log_final_state(
+        &self,
+        positions: &HashMap<SpaceId, (f64, f64)>,
+        edges: &HashSet<(SpaceId, SpaceId)>,
+        dimensions: &HashMap<SpaceId, (i32, i32)>,
+    ) {
+        let mut min_edge = f64::MAX;
+        let mut max_edge = 0.0f64;
+        let mut total_edge = 0.0;
+        let mut count = 0;
+        for &(id_a, id_b) in edges {
+            let (ax, ay) = positions[&id_a];
+            let (bx, by) = positions[&id_b];
+            let dist = ((bx - ax).powi(2) + (by - ay).powi(2)).sqrt();
+            let (wa, ha) = dimensions[&id_a];
+            let (wb, hb) = dimensions[&id_b];
+            let avg_size = ((wa + wb) as f64 / 2.0).max((ha + hb) as f64 / 2.0);
+            let ideal = avg_size + self.config.ideal_spacing;
+            trace!(
+                edge = format!("{}->{}", id_a.0, id_b.0),
+                dist = format!("{:.1}", dist),
+                ideal = format!("{:.1}", ideal),
+                delta = format!("{:+.1}", dist - ideal),
+                "edge distance"
+            );
+            min_edge = min_edge.min(dist);
+            max_edge = max_edge.max(dist);
+            total_edge += dist;
+            count += 1;
+        }
+        if count > 0 {
+            debug!(
+                avg_edge_dist = format!("{:.1}", total_edge / count as f64),
+                min_edge_dist = format!("{:.1}", min_edge),
+                max_edge_dist = format!("{:.1}", max_edge),
+                "simulation complete"
+            );
         }
     }
 }
@@ -512,7 +592,7 @@ fn initial_placement(
     let base_radius = avg_room_size + 2.0;
 
     // Find the root space (PreferCentral or entry)
-    let root_id = find_root(spatial);
+    let root_id = find_bfs_root(spatial);
 
     // Place root at origin
     positions.insert(root_id, (0.0, 0.0));
@@ -565,37 +645,6 @@ fn initial_placement(
     }
 
     positions
-}
-
-/// Find the root space: PreferCentral, then Entry, then first.
-fn find_root(spatial: &SpatialPlan) -> SpaceId {
-    use crate::intent::graph::NodeRole;
-
-    for constraint in &spatial.constraints {
-        if let SpatialConstraint::PreferCentral { space } = constraint
-            && spatial.spaces.iter().any(|s| s.id == *space)
-        {
-            return *space;
-        }
-    }
-
-    spatial
-        .spaces
-        .iter()
-        .find(|s| s.role == NodeRole::Entry)
-        .or_else(|| spatial.spaces.first())
-        .map(|s| s.id)
-        .unwrap_or(SpaceId(0))
-}
-
-/// Build adjacency list from spatial links.
-fn build_adjacency(spatial: &SpatialPlan) -> HashMap<SpaceId, Vec<SpaceId>> {
-    let mut adj: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
-    for link in &spatial.links {
-        adj.entry(link.from).or_default().push(link.to);
-        adj.entry(link.to).or_default().push(link.from);
-    }
-    adj
 }
 
 /// Convert floating-point CENTER positions to integer grid positions as PlacedSpaces.
@@ -760,8 +809,8 @@ fn apply_force_constraints(
                     let ra = placed[idx_a].rect;
                     let rb = placed[idx_b].rect;
 
-                    let gap_x = compute_axis_gap_x(&ra, &rb);
-                    let gap_y = compute_axis_gap_y(&ra, &rb);
+                    let gap_x = ra.gap_x(&rb);
+                    let gap_y = ra.gap_y(&rb);
 
                     // If both axes have gaps (diagonal), push on the smaller one.
                     // If only one axis has a gap, push on that axis.
@@ -811,95 +860,6 @@ fn apply_force_constraints(
 
         if !any_adjustment {
             break;
-        }
-    }
-}
-
-/// Compute the x-axis gap between two rects. Returns 0 if they overlap in x.
-fn compute_axis_gap_x(a: &Rect, b: &Rect) -> i32 {
-    if a.x + a.w <= b.x {
-        b.x - (a.x + a.w)
-    } else if b.x + b.w <= a.x {
-        a.x - (b.x + b.w)
-    } else {
-        0
-    }
-}
-
-/// Compute the y-axis gap between two rects. Returns 0 if they overlap in y.
-fn compute_axis_gap_y(a: &Rect, b: &Rect) -> i32 {
-    if a.y + a.h <= b.y {
-        b.y - (a.y + a.h)
-    } else if b.y + b.h <= a.y {
-        a.y - (b.y + b.h)
-    } else {
-        0
-    }
-}
-
-/// Normalize all placed spaces so minimum coordinates are at a positive margin.
-fn normalize_positions(placed: &mut [PlacedSpace]) {
-    const MARGIN: i32 = 2;
-
-    if placed.is_empty() {
-        return;
-    }
-
-    let min_x = placed.iter().map(|s| s.rect.x).min().unwrap_or(0);
-    let min_y = placed.iter().map(|s| s.rect.y).min().unwrap_or(0);
-
-    let shift_x = MARGIN - min_x;
-    let shift_y = MARGIN - min_y;
-
-    if shift_x == 0 && shift_y == 0 {
-        return;
-    }
-
-    for space in placed.iter_mut() {
-        space.rect.x += shift_x;
-        space.rect.y += shift_y;
-        space.footprint = Footprint::Rect(space.rect);
-    }
-}
-
-/// Extract width/height from a space's kind.
-fn get_space_dimensions(space: &crate::spatial::plan::SpaceSpec) -> (i32, i32) {
-    match &space.kind {
-        SpaceKind::Atomic(a) => (a.width, a.height),
-    }
-}
-
-/// Apply shape refinement to each placed space (same logic as column planner).
-fn apply_shape_refinement(
-    placed: &mut [PlacedSpace],
-    spatial: &SpatialPlan,
-    location_kind: LocationKind,
-    rng: &mut dyn rand::RngCore,
-) {
-    for space in placed.iter_mut() {
-        let spec = spatial
-            .spaces
-            .iter()
-            .find(|s| s.id == space.space_id)
-            .expect("placed space must have matching spec");
-
-        if space.rect.w < 7 || space.rect.h < 7 {
-            continue;
-        }
-
-        let shape = select_shape_refinement(location_kind, spec);
-        let new_footprint = shape.refine(space.rect, spec, rng);
-
-        if new_footprint != Footprint::Rect(space.rect) {
-            debug!(
-                id = space.space_id.0,
-                cells = match &new_footprint {
-                    Footprint::Cells(c) => c.len(),
-                    _ => 0,
-                },
-                "applied irregular shape"
-            );
-            space.footprint = new_footprint;
         }
     }
 }

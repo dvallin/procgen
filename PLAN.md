@@ -206,7 +206,7 @@ GeometryPlanner (trait — public pipeline contract)
 | # | Task | Description |
 |---|---|---|
 | 5.1 | **Force-Directed Geometry Planner** | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `ColumnGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `ColumnGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
-| 5.2 | **Pattern Composition** | A slot in one pattern can expand into a sub-pattern. `MapScale` controls expansion budget: Tiny=1 pattern, Small=1+1 expansion, Medium=1+2, Large=recursive. Composed patterns produce 8–15 node graphs. |
+| 5.2 | **Pattern Composition** | A slot in one pattern can be marked `expandable: true`. When the filler encounters an expandable slot (and budget permits), it runs `select_pattern` on a filtered pattern library to dynamically choose a sub-pattern — reusing the same situation-tag voting mechanism as top-level selection. The sub-pattern's graph is grafted into the parent (Entry node replaces the slot, internal edges/nodes merged with key namespacing). `MapScale` controls expansion budget: Tiny=0, Small=1, Medium=2, Large=3+. Composed patterns produce 8–15 node graphs. No hard-coded pattern IDs — new patterns become auto-eligible via their votes. |
 | 5.3 | **Entity Archetype Registry** | `assets/rules/entity_archetypes.json` defines entity archetypes: `{ id, display_char, difficulty_tier, behavior_tags, default_patrol }`. Tiers: `minion`, `standard`, `elite`, `boss`. The entity planner references archetypes by ID; the registry resolves display char and tier. Provides the variety needed for difficulty scaling. Existing `entities.json` rules reference these IDs (backward-compatible). |
 | 5.4 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry along the critical path. Tag rooms with `tension: low/medium/high/climax`. Tension is a computed property on `RoomAnnotation`, not a tag — it's structural, not content. Critical path = shortest Entry→Goal path in the structural graph. |
 | 5.5 | **Tension-aware entity density** | Entity rules gain `match_tension: Option<TensionLevel>`. High-tension rooms get more/harder entities (higher tier). Low-tension rooms stay sparse (minions only). Atmosphere profiles can also reference tension for scatter intensity (more rubble near climax). |
@@ -220,6 +220,24 @@ GeometryPlanner (trait — public pipeline contract)
 - Structural motif effects (graph mutations like `BlockOrAlterLink`, `AddSecondaryConnection`) are **deferred** — the same reasoning as Phase 4.6 applies: pattern selection + vocabulary already control structure. Reintroduce only if the Abandoned Mine scenario or a future scenario genuinely can't express its structure via pattern composition alone.
 
 **Exit criterion:** Medium-scale maps (10–15 rooms) have natural spatial layouts via force-directed placement, measurable pacing curves visible in `--trace` output, and tension-appropriate entity populations. Pacing validator catches degenerate structures.
+
+**5.2 subtasks:**
+| # | Subtask | Description |
+|---|---------|-------------|
+| 5.2.1 | Data model: `expandable` on `PatternSlot` | Add `expandable: bool` (serde default false) to `PatternSlot`. Add optional `expansion_votes: Vec<ExpansionVote>` to `NarrativePattern` — each entry is `{ parent_role: NodeRole, weight: i32 }` giving the pattern affinity for expanding slots of that role. |
+| 5.2.2 | `PipelineConfig.expansion_budget` | Add `expansion_budget: Option<u32>` to `PipelineConfig`. When `None`, derive from `MapScale` (Tiny=0, Small=1, Medium=2, Large=3, Huge=4). Allow override from `SituationContext.bindings["expansion_budget"]`. |
+| 5.2.3 | Composition logic in filler | Extend `fill_pattern` to accept `&[NarrativePattern]` (full library) + `expansion_budget: u32`. For expandable slots: (a) budget>0 check, (b) RNG inclusion roll, (c) filter library (exclude self, exclude patterns with required slots > remaining budget), (d) run `select_pattern` on filtered set (with expansion_votes as bonus), (e) recursively fill sub-pattern (decrement budget), (f) graft sub-graph into parent. |
+| 5.2.4 | Graph grafting helper | `graft_subgraph(parent_nodes, parent_edges, slot_key, sub_graph, next_id)` — merges sub-pattern nodes (with key namespacing: `slot_key.sub_key`), rewires parent edges pointing at slot to sub-pattern's Entry node, re-numbers node IDs for uniqueness. |
+| 5.2.5 | Wire into `GenericIntentBuilder` | Pass pattern library + budget to the filler. Budget derived from config or scale. |
+| 5.2.6 | Annotate `narrative.json` | Mark selected slots as `expandable: true` in existing patterns: `branching_exploration.branch_a`, `branching_exploration.branch_b`, `hub_and_spoke.spoke_1`, `lock_and_key.key_area`. Optionally add `expansion_votes` to patterns (e.g., `linear_descent` gets `[{ parent_role: "Branch", weight: 2 }]`). |
+| 5.2.7 | Tests | Unit: expandable deserializes, budget=0 prevents expansion, budget=1 expands one slot, composed graph edges valid, key namespacing correct. Proptest: any expandable pattern + vocabulary produces connected graph with valid edges. Integration: medium-scale situation produces 8–15 room graph. |
+
+**5.2 design decisions:**
+- **Voting over hard-coded IDs.** Sub-pattern selection reuses `select_pattern` — situation tags guide composition contextually. Adding a new pattern to the library automatically makes it eligible for expansion without editing existing patterns.
+- **`expansion_votes` is optional, not required.** Without it, pure situation-tag voting works. The field exists for fine-tuning ("linear_descent prefers to expand Branch slots") without creating pattern-to-pattern coupling.
+- **Self-exclusion prevents infinite recursion.** The current pattern (and its ancestors in the recursion stack) are excluded from sub-selection. Combined with budget, this guarantees termination.
+- **Key namespacing preserves traceability.** A node `branch_a.hub.gate` tells you exactly where it came from in the composition tree. Annotations and debugging benefit from this.
+- **Downstream is transparent.** The composed `ScenarioGraph` looks like any other graph to spatial/geometry/tile layers. No changes needed downstream — force-directed layout (5.1) handles the larger node counts.
 
 ---
 

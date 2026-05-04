@@ -19,6 +19,11 @@ pub struct PatternSlot {
     /// If true, this slot may be omitted during instantiation (RNG choice).
     #[serde(default)]
     pub optional: bool,
+    /// If true, this slot may be expanded into a sub-pattern (budget permitting).
+    /// The sub-pattern is chosen dynamically via the same voting mechanism as
+    /// top-level pattern selection — no hard-coded pattern IDs needed.
+    #[serde(default)]
+    pub expandable: bool,
 }
 
 /// An edge template in a pattern — becomes a ScenarioEdge when instantiated.
@@ -38,6 +43,17 @@ pub struct PatternVote {
     /// The situation tag that triggers this vote.
     pub tag: String,
     /// Weight added when this tag is present (can be negative to penalize).
+    pub weight: i32,
+}
+
+/// Role-affinity vote for pattern composition: when a parent slot with this role
+/// is looking for a sub-pattern, this vote's weight is added to this pattern's
+/// score during sub-pattern selection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpansionVote {
+    /// The parent slot role that triggers this affinity.
+    pub parent_role: NodeRole,
+    /// Weight added when this pattern is considered for expanding a slot with matching role.
     pub weight: i32,
 }
 
@@ -65,4 +81,9 @@ pub struct NarrativePattern {
     /// Tag-based votes for pattern selection.
     #[serde(default)]
     pub votes: Vec<PatternVote>,
+    /// Role-affinity votes for pattern composition. When this pattern is
+    /// considered as a sub-pattern expansion for a slot, these votes add
+    /// weight based on the parent slot's role.
+    #[serde(default)]
+    pub expansion_votes: Vec<ExpansionVote>,
 }

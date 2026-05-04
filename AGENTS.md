@@ -57,6 +57,7 @@ src/
 │   └── planner.rs       # MapIntent → SpatialPlan (trait + impl + resolve_dimensions + proptest)
 ├── geometry/            # Concrete geometry placement
 │   ├── geom.rs          # Point, Rect, RectPointIter, Footprint, PlacedSpace, GeometryPlan
+│   ├── common.rs        # Shared helpers (get_space_dimensions, build_adjacency, find_bfs_root, normalize_positions, apply_shape_refinement)
 │   ├── planner.rs       # GeometryPlanner trait + ColumnGeometryPlanner (BFS column layout)
 │   ├── force_directed.rs # ForceDirectedGeometryPlanner (physics simulation layout)
 │   ├── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
@@ -116,6 +117,9 @@ These live on the types they belong to — no separate utility module:
 - **`Point::cardinals()`** — returns `[Point; 4]` (N, S, W, E neighbors)
 - **`Point::neighbors()`** — returns `[Point; 8]` (cardinal + diagonal)
 - **`Rect::overlaps(&self, other: &Rect)`** — exclusive overlap test
+- **`Rect::gap_to(&self, other: &Rect)`** — minimum axis-aligned gap (0 if overlap/touch)
+- **`Rect::gap_x(&self, other: &Rect)`** — x-axis gap (0 if overlap along x)
+- **`Rect::gap_y(&self, other: &Rect)`** — y-axis gap (0 if overlap along y)
 - **`TileId::is_walkable()`** — true for Floor, Door, LockedDoor (built-in tiles)
 - **`TileId::is_solid()`** — true for Void, Wall (built-in tiles)
 - **`TileRegistry::is_walkable(id)`** — registry-based check (works for custom tiles too)

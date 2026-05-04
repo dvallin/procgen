@@ -2,12 +2,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use tracing::{debug, info, info_span, warn};
 
+use crate::geometry::common::{
+    apply_shape_refinement, build_adjacency, find_bfs_root, get_space_dimensions,
+    normalize_positions,
+};
 use crate::geometry::geom::*;
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
-use crate::geometry::shape::select_shape_refinement;
-use crate::intent::graph::NodeRole;
+#[cfg(test)]
 use crate::intent::map_intent::LocationKind;
-use crate::spatial::plan::{SpaceId, SpaceKind, SpatialConstraint, SpatialPlan};
+use crate::spatial::plan::{SpaceId, SpatialConstraint, SpatialPlan};
 use crate::validate::Validator;
 use crate::validate::geometry::GeometryValidator;
 
@@ -86,7 +89,7 @@ impl GeometryPlanner for ColumnGeometryPlanner {
         let adjacency = build_adjacency(spatial);
 
         // Choose the BFS root: prefer a PreferCentral space (hub), otherwise entry.
-        let root_id = choose_bfs_root(spatial);
+        let root_id = find_bfs_root(spatial);
         info!(root = root_id.0, "selected BFS root");
 
         // BFS from the root to assign (depth, sibling_index) to each space.
@@ -205,41 +208,6 @@ impl ColumnGeometryPlanner {
 }
 
 // --- Internal helpers ---
-
-/// Choose the BFS root based on spatial constraints.
-/// Prefers a `PreferCentral` space (hub) as the root so it ends up at depth 0 (center).
-/// Falls back to the entry space, then the first space.
-fn choose_bfs_root(spatial: &SpatialPlan) -> SpaceId {
-    // Check for PreferCentral constraint — use that space as root.
-    for constraint in &spatial.constraints {
-        if let SpatialConstraint::PreferCentral { space } = constraint {
-            // Verify it exists in the plan.
-            if spatial.spaces.iter().any(|s| s.id == *space) {
-                return *space;
-            }
-        }
-    }
-
-    // Fall back to the entry space.
-    spatial
-        .spaces
-        .iter()
-        .find(|s| s.role == NodeRole::Entry)
-        .or_else(|| spatial.spaces.first())
-        .map(|s| s.id)
-        .unwrap_or(SpaceId(0))
-}
-
-/// Adjacency list from the spatial plan's links.
-fn build_adjacency(spatial: &SpatialPlan) -> HashMap<SpaceId, Vec<SpaceId>> {
-    let mut adj: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
-    for link in &spatial.links {
-        adj.entry(link.from).or_default().push(link.to);
-        // Also store reverse for undirected BFS traversal
-        adj.entry(link.to).or_default().push(link.from);
-    }
-    adj
-}
 
 /// BFS position assignment: each space gets a (depth, sibling_index).
 struct BfsPosition {
@@ -578,88 +546,6 @@ fn compute_bounding_box(placed: &[PlacedSpace]) -> Rect {
         y: min_y,
         w: max_x - min_x,
         h: max_y - min_y,
-    }
-}
-
-/// Normalize all placed spaces so that the minimum x and y coordinates are at
-/// least `MARGIN` tiles from the origin. This ensures corridors and walls have
-/// room to render even after constraint adjustments push spaces around.
-fn normalize_positions(placed: &mut [PlacedSpace]) {
-    const MARGIN: i32 = 2;
-
-    if placed.is_empty() {
-        return;
-    }
-
-    let min_x = placed.iter().map(|s| s.rect.x).min().unwrap_or(0);
-    let min_y = placed.iter().map(|s| s.rect.y).min().unwrap_or(0);
-
-    let shift_x = MARGIN - min_x;
-    let shift_y = MARGIN - min_y;
-
-    if shift_x == 0 && shift_y == 0 {
-        return;
-    }
-
-    debug!(
-        shift_x = shift_x,
-        shift_y = shift_y,
-        "normalizing positions"
-    );
-
-    for space in placed.iter_mut() {
-        space.rect.x += shift_x;
-        space.rect.y += shift_y;
-        space.footprint = Footprint::Rect(space.rect);
-    }
-}
-
-/// Extract width/height from a space's kind.
-fn get_space_dimensions(space: &crate::spatial::plan::SpaceSpec) -> (i32, i32) {
-    match &space.kind {
-        SpaceKind::Atomic(a) => (a.width, a.height),
-    }
-}
-
-/// Apply shape refinement to each placed space based on location kind and tags.
-///
-/// Rooms with `LocationKind::Cave` or atmosphere tag `"natural"` (and large enough
-/// bounding rect ≥ 7×7) get organic irregular footprints via [`CaveIrregularizer`].
-/// All other rooms keep their rectangular footprints.
-fn apply_shape_refinement(
-    placed: &mut [PlacedSpace],
-    spatial: &SpatialPlan,
-    location_kind: LocationKind,
-    rng: &mut dyn rand::RngCore,
-) {
-    for space in placed.iter_mut() {
-        // Find the corresponding SpaceSpec.
-        let spec = spatial
-            .spaces
-            .iter()
-            .find(|s| s.id == space.space_id)
-            .expect("placed space must have matching spec");
-
-        // Only irregularize rooms large enough (7×7 minimum).
-        if space.rect.w < 7 || space.rect.h < 7 {
-            continue;
-        }
-
-        let shape = select_shape_refinement(location_kind, spec);
-        let new_footprint = shape.refine(space.rect, spec, rng);
-
-        // Only update if shape changed from the default rect.
-        if new_footprint != Footprint::Rect(space.rect) {
-            debug!(
-                id = space.space_id.0,
-                cells = match &new_footprint {
-                    Footprint::Cells(c) => c.len(),
-                    _ => 0,
-                },
-                "applied irregular shape"
-            );
-            space.footprint = new_footprint;
-        }
     }
 }
 

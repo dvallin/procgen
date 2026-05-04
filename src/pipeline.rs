@@ -116,6 +116,10 @@ pub struct PipelineConfig {
     pub additional_atmospheres: Vec<AtmosphereProfile>,
     /// Which geometry planner to use. Default: `ForceDirected`.
     pub geometry_strategy: GeometryStrategy,
+    /// Optional expansion budget override for pattern composition.
+    /// Controls how many slots can be expanded into sub-patterns.
+    /// When `None`, derives from MapScale (Tiny=0, Small=1, Medium=2, Large=3, Huge=4).
+    pub expansion_budget: Option<u32>,
 }
 
 impl Default for PipelineConfig {
@@ -135,6 +139,7 @@ impl Default for PipelineConfig {
             additional_entity_rules: Vec::new(),
             additional_atmospheres: Vec::new(),
             geometry_strategy: GeometryStrategy::default(),
+            expansion_budget: None,
         }
     }
 }
@@ -333,7 +338,8 @@ impl Pipeline {
     /// [`GenericIntentBuilder::from_defaults`] internally, then delegates to
     /// [`Pipeline::run_with`].
     pub fn run(&self, situation: &SituationContext) -> Result<PipelineResult, PipelineError> {
-        let builder = GenericIntentBuilder::from_defaults()?;
+        let builder = GenericIntentBuilder::from_defaults()?
+            .with_expansion_budget(self.config.expansion_budget);
         self.run_with(situation, &builder)
     }
 
