@@ -15,6 +15,7 @@ Working vertical slice with full pipeline, property-based tests, and integration
 - **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
 - **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties, `TileMap` stores `Vec<TileId>`, JSON asset for tile definitions, extended palette (Water, Pit, Stairs, Rubble, Grass), tile scatter rules (connectivity-safe).
 - **Phase 4 — Room Character, Atmosphere & World-Engine Flexibility** (tasks 4.1–4.12): Feature registry (`FeatureType(String)` + `FeatureRegistry`), tag classification (structural/atmosphere/motifs), atmosphere profiles (weighted palettes per room), room zones + InteriorPlan, interior templates (6 starters), irregular room shapes (CaveIrregularizer), vermin cellar scenario, explicit pattern override, vocabulary overlays (base + override), additive rule injection, PipelineResult annotations (room letters + legend), situation directives (`PinEntity` for named quest entities). Proves the full design thesis: a world engine can control structure, compose themes, inject rules, pin entities, and read back annotated results — all without per-scenario code.
+- **Phase 5.1 — Force-Directed Geometry Planner**: `ForceDirectedGeometryPlanner` uses physics simulation (attraction along edges, repulsion between non-adjacent, overlap resolution, constraint enforcement) to produce natural spatial layouts for larger room counts (10–15+). `SimpleGeometryPlanner` renamed to `ColumnGeometryPlanner`. Both available behind `GeometryPlanner` trait; `PipelineConfig.geometry_strategy` selects which to use (`GeometryStrategy::Column` or `GeometryStrategy::ForceDirected`). CLI gains `--layout` flag (`column`/`force`). Default: force-directed.
 
 ## Pipeline (current)
 
@@ -56,7 +57,8 @@ src/
 │   └── planner.rs       # MapIntent → SpatialPlan (trait + impl + resolve_dimensions + proptest)
 ├── geometry/            # Concrete geometry placement
 │   ├── geom.rs          # Point, Rect, RectPointIter, Footprint, PlacedSpace, GeometryPlan
-│   ├── planner.rs       # SpatialPlan → GeometryPlan (BFS layout + constraint-aware placement)
+│   ├── planner.rs       # GeometryPlanner trait + ColumnGeometryPlanner (BFS column layout)
+│   ├── force_directed.rs # ForceDirectedGeometryPlanner (physics simulation layout)
 │   ├── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
 │   └── shape.rs         # ShapeRefinement trait + RectShape (no-op) + CaveIrregularizer (organic cave shapes)
 ├── tile/                # Tile-level rasterization
@@ -145,12 +147,14 @@ cargo run -- cellar                # Prints rat-infested port cellar map
 cargo run -- --seed 42             # Deterministic generation with seed
 cargo run -- crypt --seed 42       # Explicit scenario + seed
 cargo run -- --annotate            # Room letters on map + legend below
+cargo run -- --layout column       # Use BFS column layout (original)
+cargo run -- --layout force        # Use force-directed layout (default)
 cargo run -- --trace               # INFO-level pipeline trace (to stderr)
 cargo run -- --trace debug         # DEBUG-level (placement details, routing decisions)
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (392 currently: 295 unit/proptest + 23 regression + 70 integration + 4 doctests)
+cargo test       # Runs all tests (401 currently: 304 unit/proptest + 23 regression + 70 integration + 4 doctests)
 ```
 
 ## Target Architecture

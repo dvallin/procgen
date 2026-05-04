@@ -164,15 +164,15 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 **Geometry architecture (introduced in 4.5):**
 
-`SimpleGeometryPlanner` conflates three concerns that should be independently replaceable:
+`ColumnGeometryPlanner` conflates three concerns that should be independently replaceable:
 1. **Layout** — where rooms sit relative to each other (BFS columns currently; BSP, force-directed, L-system in future).
 2. **Shape** — what each room's footprint looks like (`ShapeRefinement` trait; rect, cave irregular, cellular automata, L-shaped in future).
 3. **Routing** — how corridors connect rooms (already abstracted via `CorridorRouter` trait).
 
-Shape is extracted in 4.5 as the `ShapeRefinement` trait. Layout stays inlined in `SimpleGeometryPlanner` for now — extract when a second layout algorithm arrives. The composition:
+Shape is extracted in 4.5 as the `ShapeRefinement` trait. Layout stays inlined in `ColumnGeometryPlanner` for now — extract when a second layout algorithm arrives. The composition:
 ```
 GeometryPlanner (trait — public pipeline contract)
-├── SimpleGeometryPlanner (composes):
+├── ColumnGeometryPlanner (composes):
 │   ├── Layout: BFS columns (internal, not yet a trait)
 │   ├── ShapeRefinement: per-room footprint transform (trait)
 │   │   ├── RectShape (no-op, default)
@@ -188,7 +188,7 @@ GeometryPlanner (trait — public pipeline contract)
 |---|---------|-------------|
 | 4.5.1 | `ShapeRefinement` trait + `CaveIrregularizer` | ✅ | New `src/geometry/shape.rs`. Trait: `fn refine(rect, space, rng) → Footprint`. `RectShape` (no-op) + `CaveIrregularizer` (carve corners, roughen edges, connectivity BFS, min-cell-count fallback). |
 | 4.5.2 | Thread RNG into geometry planning | ✅ | Extend `GeometryPlanner::plan` signature to accept `&mut dyn RngCore`. Update all call sites (pipeline, tests). Mechanical but necessary for deterministic irregularization. |
-| 4.5.3 | Wire shape refinement into `SimpleGeometryPlanner` | ✅ | After BFS placement, iterate `PlacedSpace`s. Select `ShapeRefinement` per room: `CaveIrregularizer` if `LocationKind::Cave` or tag `"natural"` on rooms ≥ 7×7, else `RectShape`. Propagate `LocationKind` via `SpatialPlan`. |
+| 4.5.3 | Wire shape refinement into `ColumnGeometryPlanner` | ✅ | After BFS placement, iterate `PlacedSpace`s. Select `ShapeRefinement` per room: `CaveIrregularizer` if `LocationKind::Cave` or tag `"natural"` on rooms ≥ 7×7, else `RectShape`. Propagate `LocationKind` via `SpatialPlan`. |
 | 4.5.4 | Downstream compatibility | ✅ | Verify/fix zone classification, scatter, feature placement, reserved paths for `Footprint::Cells`. Zones iterate actual floor cells, not rect interior. |
 | 4.5.5 | Tests | ✅ | Unit tests (connectivity, subset-of-rect, min-threshold, determinism). Proptest (any rect ≥ 5×5 produces connected result). Integration: `cargo run -- cave` shows non-rectangular rooms. Existing tests unaffected. |
 | 4.5.6 | Move shape refinement after routing (cleanup) | ⏭️ Skipped | The protected cross + `connect_doors_to_rooms` band-aid is cheap, correct, and keeps shape/routing decoupled. Revisit only if a future shape strategy breaks the "carve inward until floor" heuristic. |
@@ -205,7 +205,7 @@ GeometryPlanner (trait — public pipeline contract)
 
 | # | Task | Description |
 |---|---|---|
-| 5.1 | **Force-Directed Geometry Planner** | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `SimpleGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `SimpleGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
+| 5.1 | **Force-Directed Geometry Planner** | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `ColumnGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `ColumnGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
 | 5.2 | **Pattern Composition** | A slot in one pattern can expand into a sub-pattern. `MapScale` controls expansion budget: Tiny=1 pattern, Small=1+1 expansion, Medium=1+2, Large=recursive. Composed patterns produce 8–15 node graphs. |
 | 5.3 | **Entity Archetype Registry** | `assets/rules/entity_archetypes.json` defines entity archetypes: `{ id, display_char, difficulty_tier, behavior_tags, default_patrol }`. Tiers: `minion`, `standard`, `elite`, `boss`. The entity planner references archetypes by ID; the registry resolves display char and tier. Provides the variety needed for difficulty scaling. Existing `entities.json` rules reference these IDs (backward-compatible). |
 | 5.4 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry along the critical path. Tag rooms with `tension: low/medium/high/climax`. Tension is a computed property on `RoomAnnotation`, not a tag — it's structural, not content. Critical path = shortest Entry→Goal path in the structural graph. |

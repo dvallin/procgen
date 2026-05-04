@@ -20,9 +20,10 @@ use crate::feature::plan::{FeaturePlan, FeaturePlanError};
 use crate::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
 use crate::feature::registry::FeatureRegistry;
 use crate::feature::rules::FeatureRule;
+use crate::geometry::force_directed::{ForceDirectedConfig, ForceDirectedGeometryPlanner};
 use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
-    GeometryPlanError, GeometryPlanner, PlacementConfig, SimpleGeometryPlanner,
+    ColumnGeometryPlanner, GeometryPlanError, GeometryPlanner, PlacementConfig,
 };
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
 use crate::intent::generic_builder::GenericIntentBuilder;
@@ -47,6 +48,23 @@ use std::collections::{HashMap, HashSet};
 // ---------------------------------------------------------------------------
 // PipelineConfig + RelaxationStrategy
 // ---------------------------------------------------------------------------
+
+/// Which geometry planner implementation to use.
+#[derive(Debug, Clone)]
+pub enum GeometryStrategy {
+    /// BFS column layout (the original `SimpleGeometryPlanner`).
+    /// Good for small maps (3–6 rooms) with linear or tree-like graphs.
+    Column,
+    /// Force-directed simulation layout.
+    /// Better for medium-to-large maps (7–15+ rooms) with complex topology.
+    ForceDirected,
+}
+
+impl Default for GeometryStrategy {
+    fn default() -> Self {
+        Self::ForceDirected
+    }
+}
 
 /// Strategy for relaxing constraints when a geometry retry is triggered.
 #[derive(Debug, Clone)]
@@ -96,6 +114,8 @@ pub struct PipelineConfig {
     /// Additional atmosphere profiles merged *after* the base profiles (default or override).
     /// Use this to inject temporary quest/event effects that activate on tag matches.
     pub additional_atmospheres: Vec<AtmosphereProfile>,
+    /// Which geometry planner to use. Default: `ForceDirected`.
+    pub geometry_strategy: GeometryStrategy,
 }
 
 impl Default for PipelineConfig {
@@ -114,6 +134,7 @@ impl Default for PipelineConfig {
             additional_feature_rules: Vec::new(),
             additional_entity_rules: Vec::new(),
             additional_atmospheres: Vec::new(),
+            geometry_strategy: GeometryStrategy::default(),
         }
     }
 }
@@ -540,11 +561,27 @@ impl Pipeline {
                 attempt = attempt,
                 min_gap = config.min_gap,
                 separation_gap = config.separation_gap,
+                strategy = ?self.config.geometry_strategy,
                 "geometry attempt"
             );
 
-            let planner = SimpleGeometryPlanner { config };
-            let plan = match planner.plan(spatial, rng) {
+            let plan = match &self.config.geometry_strategy {
+                GeometryStrategy::Column => {
+                    let planner = ColumnGeometryPlanner { config };
+                    planner.plan(spatial, rng)
+                }
+                GeometryStrategy::ForceDirected => {
+                    let planner = ForceDirectedGeometryPlanner {
+                        config: ForceDirectedConfig {
+                            placement: config,
+                            ..ForceDirectedConfig::default()
+                        },
+                    };
+                    planner.plan(spatial, rng)
+                }
+            };
+
+            let plan = match plan {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(attempt = attempt, error = %e, "geometry planning error");

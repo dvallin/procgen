@@ -5,7 +5,7 @@ use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
 use procgen::feature::registry::FeatureRegistry;
-use procgen::pipeline::{Pipeline, PipelineConfig};
+use procgen::pipeline::{GeometryStrategy, Pipeline, PipelineConfig};
 use procgen::tile::ascii::{render_ascii, render_ascii_annotated};
 use procgen::tile::registry::TileRegistry;
 use tracing_subscriber::EnvFilter;
@@ -29,6 +29,10 @@ struct Cli {
     /// Print annotated map with room letters and legend.
     #[arg(long)]
     annotate: bool,
+
+    /// Geometry layout strategy.
+    #[arg(long, default_value = "force")]
+    layout: Layout,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -44,6 +48,14 @@ enum TraceLevel {
     Info,
     Debug,
     All,
+}
+
+#[derive(Clone, ValueEnum)]
+enum Layout {
+    /// BFS column layout (original, good for small maps).
+    Column,
+    /// Force-directed simulation (better for larger maps).
+    Force,
 }
 
 fn main() {
@@ -67,6 +79,10 @@ fn main() {
 
     let config = PipelineConfig {
         seed: cli.seed,
+        geometry_strategy: match cli.layout {
+            Layout::Column => GeometryStrategy::Column,
+            Layout::Force => GeometryStrategy::ForceDirected,
+        },
         ..PipelineConfig::default()
     };
     let pipeline = Pipeline { config };

@@ -61,11 +61,11 @@ impl Default for PlacementConfig {
 }
 
 #[derive(Default)]
-pub struct SimpleGeometryPlanner {
+pub struct ColumnGeometryPlanner {
     pub config: PlacementConfig,
 }
 
-impl GeometryPlanner for SimpleGeometryPlanner {
+impl GeometryPlanner for ColumnGeometryPlanner {
     fn plan(
         &self,
         spatial: &SpatialPlan,
@@ -142,7 +142,7 @@ impl GeometryPlanner for SimpleGeometryPlanner {
     }
 }
 
-impl SimpleGeometryPlanner {
+impl ColumnGeometryPlanner {
     /// Runs `plan()` followed by `GeometryValidator`. On validation errors,
     /// retries up to `MAX_RETRIES` times with relaxed spacing (+2 each retry).
     pub fn plan_with_validation(
@@ -156,7 +156,7 @@ impl SimpleGeometryPlanner {
         let mut last_errors = Vec::new();
 
         for attempt in 0..=MAX_RETRIES {
-            let planner = SimpleGeometryPlanner {
+            let planner = ColumnGeometryPlanner {
                 config: PlacementConfig {
                     min_gap: self.config.min_gap + (attempt as i32) * 2,
                     separation_gap: self.config.separation_gap + (attempt as i32) * 2,
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn prefer_central_space_is_at_depth_zero() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn prefer_perimeter_shifts_space_outward() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -826,7 +826,7 @@ mod tests {
             location_kind: LocationKind::Dungeon,
         };
 
-        let planner = SimpleGeometryPlanner {
+        let planner = ColumnGeometryPlanner {
             config: PlacementConfig {
                 min_gap: 2,
                 separation_gap: 8,
@@ -881,7 +881,7 @@ mod tests {
         };
 
         let min_gap = 3;
-        let planner = SimpleGeometryPlanner {
+        let planner = ColumnGeometryPlanner {
             config: PlacementConfig {
                 min_gap,
                 separation_gap: 6,
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn no_overlaps_after_constraint_adjustments() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -927,7 +927,7 @@ mod tests {
     #[test]
     fn geometry_validator_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -975,7 +975,7 @@ mod tests {
             location_kind: LocationKind::Dungeon,
         };
 
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -1002,7 +1002,7 @@ mod tests {
             constraints: vec![],
             location_kind: LocationKind::Dungeon,
         };
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         assert!(planner.plan(&spatial, &mut rng).is_err());
     }
@@ -1015,7 +1015,7 @@ mod tests {
             constraints: vec![],
             location_kind: LocationKind::Dungeon,
         };
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan(&spatial, &mut rng).unwrap();
 
@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn plan_with_validation_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
+        let planner = ColumnGeometryPlanner::default();
         let mut rng = StdRng::seed_from_u64(42);
         let plan = planner.plan_with_validation(&spatial, &mut rng);
         assert!(
