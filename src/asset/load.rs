@@ -470,12 +470,13 @@ mod tests {
     #[test]
     fn load_embedded_vocabularies_succeeds() {
         let vocabs = load_default_vocabularies().unwrap();
-        assert_eq!(vocabs.len(), 3);
+        assert_eq!(vocabs.len(), 4);
 
         let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"undead_nobility"));
         assert!(ids.contains(&"urban_underground"));
         assert!(ids.contains(&"natural_cave"));
+        assert!(ids.contains(&"vermin_cellar"));
     }
 
     #[test]

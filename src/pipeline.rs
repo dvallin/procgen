@@ -85,6 +85,17 @@ pub struct PipelineConfig {
     pub atmosphere_sample_budget: usize,
     /// Optional interior templates override. If `None`, loads from the default asset path.
     pub interior_templates: Option<Vec<InteriorTemplate>>,
+
+    // ── Additive rule injection (merged with defaults, never replacing) ──
+    /// Additional feature rules merged *after* the base rules (default or override).
+    /// Use this to layer quest/event-specific features without replacing the entire ruleset.
+    pub additional_feature_rules: Vec<FeatureRule>,
+    /// Additional entity rules merged *after* the base rules (default or override).
+    /// Use this to layer quest/event-specific entities without replacing the entire ruleset.
+    pub additional_entity_rules: Vec<EntityRule>,
+    /// Additional atmosphere profiles merged *after* the base profiles (default or override).
+    /// Use this to inject temporary quest/event effects that activate on tag matches.
+    pub additional_atmospheres: Vec<AtmosphereProfile>,
 }
 
 impl Default for PipelineConfig {
@@ -100,6 +111,9 @@ impl Default for PipelineConfig {
             atmosphere_profiles: None,
             atmosphere_sample_budget: 3,
             interior_templates: None,
+            additional_feature_rules: Vec::new(),
+            additional_entity_rules: Vec::new(),
+            additional_atmospheres: Vec::new(),
         }
     }
 }
@@ -107,6 +121,47 @@ impl Default for PipelineConfig {
 // ---------------------------------------------------------------------------
 // PipelineResult
 // ---------------------------------------------------------------------------
+
+/// A named entity placed in a specific room (from situation directives).
+#[derive(Debug, Clone)]
+pub struct NamedEntityAnnotation {
+    /// The entity archetype ID.
+    pub archetype: crate::entity::plan::EntityArchetypeId,
+    /// The unique display name.
+    pub name: String,
+    /// The tile position where the entity was placed.
+    pub position: crate::geometry::geom::Point,
+}
+
+/// Annotation for a single room in the generated map.
+///
+/// Carries metadata that a world engine can use to correlate map output
+/// with narrative graph nodes — room labels, roles, positions, and doors.
+#[derive(Debug, Clone)]
+pub struct RoomAnnotation {
+    /// Internal space ID (matches [`SpaceId`] in [`SpatialPlan`]).
+    pub space_id: crate::spatial::plan::SpaceId,
+    /// Human-readable label (from vocabulary entry, e.g. "Ossuary").
+    pub label: Option<String>,
+    /// Narrative role of this room.
+    pub role: crate::intent::graph::NodeRole,
+    /// Structural tags on this room (e.g. "main_goal", "locked").
+    pub structural_tags: Vec<crate::tag::Tag>,
+    /// Bounding rectangle of the room in tile coordinates.
+    pub rect: crate::geometry::geom::Rect,
+    /// Door positions on the room boundary.
+    pub doors: Vec<crate::geometry::geom::Point>,
+    /// True if this room is the dungeon entry point.
+    pub is_entry: bool,
+    /// True if this room is the primary goal (has "main_goal" structural tag).
+    pub is_goal: bool,
+    /// Assigned letter for map overlay rendering (A, B, C, …).
+    pub letter: char,
+    /// Center point of the room (for letter overlay positioning).
+    pub center: crate::geometry::geom::Point,
+    /// Named entities placed in this room (from situation directives).
+    pub named_entities: Vec<NamedEntityAnnotation>,
+}
 
 /// Holds every intermediate and final output produced by a pipeline run.
 #[derive(Debug)]
@@ -125,6 +180,8 @@ pub struct PipelineResult {
     pub entities: EntityPlan,
     /// Interior plans per room (zones, doors, reserved paths).
     pub interiors: Vec<InteriorPlan>,
+    /// Room annotations for world-engine correlation.
+    pub annotations: Vec<RoomAnnotation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -367,9 +424,15 @@ impl Pipeline {
             &features,
             &entity_rules,
             &per_room_entity_rules,
+            &situation.directives,
             &mut rng,
         )?;
         self.validate_entities(&entities, &features, &tiles, &geometry, &spatial)?;
+
+        // ── 8. Build annotations ─────────────────────────────────────────────
+        info!("building annotations");
+        let annotations = Self::build_annotations(&spatial, &geometry, &tiles, &entities);
+        debug!(count = annotations.len(), "annotations ready");
 
         info!("pipeline complete");
         Ok(PipelineResult {
@@ -380,10 +443,82 @@ impl Pipeline {
             features,
             entities,
             interiors,
+            annotations,
         })
     }
 
-    // ── internal helpers ───────────────────────────────────────────────
+    // ── internal helpers ─────────────────────────────────────────────────────
+
+    /// Build room annotations from the spatial plan and geometry.
+    ///
+    /// Each room gets a letter (A, B, C, …), its center point, label, role,
+    /// structural tags, bounding rect, door positions, and Entry/Goal flags.
+    fn build_annotations(
+        spatial: &SpatialPlan,
+        geometry: &GeometryPlan,
+        tiles: &TileMap,
+        entities: &EntityPlan,
+    ) -> Vec<RoomAnnotation> {
+        use crate::intent::graph::NodeRole;
+        use crate::interior::paths::find_room_doors;
+        use crate::tag::Tag;
+
+        let spec_map: std::collections::HashMap<
+            crate::spatial::plan::SpaceId,
+            &crate::spatial::plan::SpaceSpec,
+        > = spatial.spaces.iter().map(|s| (s.id, s)).collect();
+
+        let mut annotations = Vec::new();
+        let mut letter = b'A';
+
+        for placed in &geometry.spaces {
+            let Some(spec) = spec_map.get(&placed.space_id) else {
+                continue;
+            };
+
+            let doors = find_room_doors(tiles, placed.rect);
+            let center = crate::geometry::geom::Point {
+                x: placed.rect.x + placed.rect.w / 2,
+                y: placed.rect.y + placed.rect.h / 2,
+            };
+
+            let is_entry = spec.role == NodeRole::Entry;
+            let is_goal = spec.structural_tags.contains(&Tag::from("main_goal"));
+
+            let assigned_letter = letter as char;
+            if letter < b'Z' {
+                letter += 1;
+            }
+
+            // Collect named entities for this room.
+            let named_entities: Vec<NamedEntityAnnotation> = entities
+                .entities
+                .iter()
+                .filter(|e| e.space_id == placed.space_id && e.name.is_some())
+                .map(|e| NamedEntityAnnotation {
+                    archetype: e.archetype.clone(),
+                    name: e.name.clone().unwrap(),
+                    position: e.position,
+                })
+                .collect();
+
+            annotations.push(RoomAnnotation {
+                space_id: placed.space_id,
+                label: spec.label.clone(),
+                role: spec.role,
+                structural_tags: spec.structural_tags.clone(),
+                rect: placed.rect,
+                doors,
+                is_entry,
+                is_goal,
+                letter: assigned_letter,
+                center,
+                named_entities,
+            });
+        }
+
+        annotations
+    }
 
     /// Run geometry planning with a retry loop governed by [`PipelineConfig`].
     ///
@@ -528,22 +663,26 @@ impl Pipeline {
         }
     }
 
-    /// Resolve feature rules from config or defaults.
+    /// Resolve feature rules from config or defaults, then append any additional rules.
     fn resolve_feature_rules(&self) -> Vec<FeatureRule> {
-        match &self.config.feature_rules {
+        let mut rules = match &self.config.feature_rules {
             Some(rules) => rules.clone(),
             None => crate::asset::load::load_default_feature_rules()
                 .expect("embedded feature rules are valid JSON"),
-        }
+        };
+        rules.extend(self.config.additional_feature_rules.iter().cloned());
+        rules
     }
 
-    /// Resolve entity rules from config or defaults.
+    /// Resolve entity rules from config or defaults, then append any additional rules.
     fn resolve_entity_rules(&self) -> Vec<EntityRule> {
-        match &self.config.entity_rules {
+        let mut rules = match &self.config.entity_rules {
             Some(rules) => rules.clone(),
             None => crate::asset::load::load_default_entity_rules()
                 .expect("embedded entity rules are valid JSON"),
-        }
+        };
+        rules.extend(self.config.additional_entity_rules.iter().cloned());
+        rules
     }
 
     /// Resolve interior templates from config or defaults.
@@ -572,11 +711,12 @@ impl Pipeline {
         HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>>,
         HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>>,
     ) {
-        let atmosphere_profiles = match &self.config.atmosphere_profiles {
+        let mut atmosphere_profiles = match &self.config.atmosphere_profiles {
             Some(profiles) => profiles.clone(),
             None => crate::asset::load::load_default_atmosphere_profiles()
                 .expect("embedded atmosphere profiles are valid JSON"),
         };
+        atmosphere_profiles.extend(self.config.additional_atmospheres.iter().cloned());
 
         let mut per_room_feature_rules: HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>> =
             HashMap::new();
@@ -677,6 +817,9 @@ mod tests {
         assert!(cfg.feature_rules.is_none());
         assert!(cfg.entity_rules.is_none());
         assert!(cfg.interior_templates.is_none());
+        assert!(cfg.additional_feature_rules.is_empty());
+        assert!(cfg.additional_entity_rules.is_empty());
+        assert!(cfg.additional_atmospheres.is_empty());
         match &cfg.relaxation {
             RelaxationStrategy::IncreaseSpacing { step } => assert_eq!(*step, 2),
             RelaxationStrategy::None => panic!("expected IncreaseSpacing"),
@@ -689,14 +832,7 @@ mod tests {
             config: PipelineConfig {
                 max_retries: 1,
                 relaxation: RelaxationStrategy::None,
-                seed: None,
-                feature_rules: None,
-                entity_rules: None,
-                tile_registry: None,
-                feature_registry: None,
-                atmosphere_profiles: None,
-                atmosphere_sample_budget: 3,
-                interior_templates: None,
+                ..PipelineConfig::default()
             },
         };
         let base = PlacementConfig::default();
@@ -711,14 +847,7 @@ mod tests {
             config: PipelineConfig {
                 max_retries: 5,
                 relaxation: RelaxationStrategy::IncreaseSpacing { step: 3 },
-                seed: None,
-                feature_rules: None,
-                entity_rules: None,
-                tile_registry: None,
-                feature_registry: None,
-                atmosphere_profiles: None,
-                atmosphere_sample_budget: 3,
-                interior_templates: None,
+                ..PipelineConfig::default()
             },
         };
         let base = PlacementConfig {

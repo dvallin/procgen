@@ -56,9 +56,10 @@ impl GenericIntentBuilder {
         Ok(Self::new(patterns, vocabularies))
     }
 
-    /// Find a vocabulary by its ID (matching the situation's "theme" binding).
-    fn find_vocabulary(&self, theme_id: &str) -> Option<&ThemeVocabulary> {
-        self.vocabularies.iter().find(|v| v.id == theme_id)
+    /// Find a vocabulary by its ID and resolve any base inheritance.
+    fn find_vocabulary(&self, theme_id: &str) -> Option<ThemeVocabulary> {
+        let vocab = self.vocabularies.iter().find(|v| v.id == theme_id)?;
+        vocab.resolve(&self.vocabularies)
     }
 }
 
@@ -71,10 +72,27 @@ impl IntentBuilder for GenericIntentBuilder {
         let _span = info_span!("intent_building").entered();
 
         // 1. Select a pattern.
-        let pattern = select_pattern(&self.patterns, situation, rng).map_err(|e| {
-            IntentBuildError::InvalidSituation(format!("pattern selection failed: {e}"))
-        })?;
-        debug!(pattern_id = %pattern.id, pattern_name = %pattern.name, "pattern selected");
+        //    If bindings["pattern"] is set, use it as an explicit override.
+        //    Otherwise, fall back to tag-based weighted voting.
+        let pattern = if let Some(pattern_id) = situation.bindings.get("pattern") {
+            let p = self
+                .patterns
+                .iter()
+                .find(|p| p.id == *pattern_id)
+                .ok_or_else(|| {
+                    IntentBuildError::InvalidSituation(format!(
+                        "no pattern found with id '{pattern_id}'"
+                    ))
+                })?;
+            debug!(pattern_id = %p.id, pattern_name = %p.name, "pattern override from binding");
+            p
+        } else {
+            let p = select_pattern(&self.patterns, situation, rng).map_err(|e| {
+                IntentBuildError::InvalidSituation(format!("pattern selection failed: {e}"))
+            })?;
+            debug!(pattern_id = %p.id, pattern_name = %p.name, "pattern selected via voting");
+            p
+        };
 
         // 2. Look up vocabulary from bindings["theme"].
         let theme_id = situation
@@ -90,7 +108,7 @@ impl IntentBuilder for GenericIntentBuilder {
         debug!(vocabulary = %vocabulary.id, "vocabulary resolved");
 
         // 3. Fill pattern slots with vocabulary entries.
-        let filled = fill_pattern(pattern, vocabulary, rng)
+        let filled = fill_pattern(pattern, &vocabulary, rng)
             .map_err(|e| IntentBuildError::InvalidSituation(format!("slot filling failed: {e}")))?;
         debug!(
             nodes = filled.graph.nodes.len(),
@@ -380,6 +398,107 @@ mod tests {
         assert!(
             has_restricted,
             "crypt should have a RestrictedTraversal edge"
+        );
+    }
+
+    #[test]
+    fn explicit_pattern_override_selects_specified_pattern() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        // Use crypt theme but force linear_descent pattern (instead of lock_and_key).
+        let situation =
+            SituationContext::new(vec![Tag::from("noble_family"), Tag::from("sealed_crypt")])
+                .with_binding("theme", "undead_nobility")
+                .with_binding("pattern", "linear_descent");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let intent = builder.build(&situation, &mut rng).unwrap();
+
+        // linear_descent has Transition nodes (passage_1, passage_2) — lock_and_key does not.
+        let transition_count = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter(|n| n.role == NodeRole::Transition)
+            .count();
+        assert!(
+            transition_count >= 2,
+            "linear_descent should have at least 2 Transition nodes, got {}",
+            transition_count
+        );
+    }
+
+    #[test]
+    fn explicit_pattern_override_with_vermin_cellar() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        // Use vermin_cellar theme but force linear_descent (normally it would pick hub_and_spoke).
+        let situation = SituationContext::new(vec![
+            Tag::from("tavern"),
+            Tag::from("cellar"),
+            Tag::from("infested"),
+        ])
+        .with_binding("theme", "vermin_cellar")
+        .with_binding("pattern", "linear_descent");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let intent = builder.build(&situation, &mut rng).unwrap();
+
+        // Should still use vermin_cellar vocabulary (Building location).
+        assert_eq!(intent.location_kind, LocationKind::Building);
+
+        // Should have the linear chain structure.
+        let transition_count = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter(|n| n.role == NodeRole::Transition)
+            .count();
+        assert!(
+            transition_count >= 2,
+            "linear_descent forced on vermin_cellar should have Transition nodes, got {}",
+            transition_count
+        );
+
+        // Should still have vermin-themed labels from vocabulary.
+        let labels: Vec<&str> = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter_map(|n| n.label.as_deref())
+            .collect();
+        let has_vermin_label = labels.iter().any(|l| {
+            l.contains("Cellar")
+                || l.contains("Rat")
+                || l.contains("Gnawed")
+                || l.contains("Pantry")
+                || l.contains("Grain")
+                || l.contains("Drain")
+                || l.contains("Warren")
+                || l.contains("Den")
+                || l.contains("Hatch")
+                || l.contains("Kitchen")
+        });
+        assert!(
+            has_vermin_label,
+            "expected vermin-themed labels, got: {:?}",
+            labels
+        );
+    }
+
+    #[test]
+    fn unknown_pattern_override_errors() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        let situation = SituationContext::new(vec![Tag::from("locked_vault")])
+            .with_binding("theme", "undead_nobility")
+            .with_binding("pattern", "nonexistent_pattern");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let result = builder.build(&situation, &mut rng);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent_pattern"),
+            "error should mention the bad pattern id: {}",
+            err
         );
     }
 }

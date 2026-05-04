@@ -6,19 +6,15 @@ A procedural dungeon/map generator written in Rust. It transforms high-level nar
 
 ## Current State
 
-Working vertical slice with full pipeline, property-based tests, and integration tests. Three demo scenarios (crypt, tavern, cave) produce ASCII output. All intent generation is data-driven — no hard-coded builders remain.
+Working vertical slice with full pipeline, property-based tests, and integration tests. Four demo scenarios (crypt, tavern, cave, cellar) produce ASCII output. All intent generation is data-driven — no hard-coded builders remain.
 
 **Completed phases (original build-out):** Module restructure, Tag newtype, MapIntent + SituationContext, SpatialPlan + generic geometry, real geometry placement (footprints, routing, corridor merging, constraint-aware layout), FeaturePlan, EntityPlan, Pipeline Runner + Validation Loop (retry, relaxation, seeded RNG).
 
 **Completed phases (new roadmap):**
 - **Phase 1 — Data-Driven Rules & Asset Loading** (tasks 1.1–1.5): Feature/entity rules as JSON assets with embedded fallback, generic asset loader, PipelineConfig overrides.
 - **Phase 2 — Narrative Patterns & Intent Generation** (tasks 2.1–2.8): NarrativePattern data model, 5 starter patterns, pattern selector (weighted voting + RNG), 2 theme vocabularies, slot filler, structural constraint inference, GenericIntentBuilder, regression tests. Hard-coded fixture builders removed; `Pipeline::run()` uses GenericIntentBuilder internally.
-- **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties (walkable, opaque, ascii_char, tags), `TileMap` stores `Vec<TileId>`, backward-compat `Tile` namespace struct with named constants (`Tile::FLOOR`, etc.), JSON asset for tile definitions. Rasterizer accepts `&TileRegistry`. Extended palette (Water, Pit, Stairs, Rubble, Grass). ASCII renderer uses registry for tile characters (`render_ascii_full`). **Tile scatter rules** (`assets/rules/tile_scatter.json`) replace floor tiles with terrain variants at data-driven densities during rasterization — proper separation: tiles ARE the ground (water, rubble, grass), features are objects ON tiles (moss, stalagmites, fungus). Non-walkable scatter is connectivity-safe.
-- **Phase 4.1 — Feature Registry & FeatureCategory enum**: `FeatureType(String)` newtype replaces `FeatureKind` enum. `FeatureRegistry` maps type name → `FeatureProperties { category, ascii_char, blocking, tags }`. `FeatureCategory` enum (Furniture, Container, Trap, Decoration, Interactable) stays for behavior dispatch. Feature rules reference type strings ("altar", "chest") instead of enum variants. New feature types added via `assets/rules/feature_types.json` without code changes.
-- **Phase 4.2 — Tag classification & atmosphere profiles**: `SpaceSpec` gains `structural_tags`, `atmosphere_tags`, `motifs` (replacing flat `tags`). `AtmosphereProfile` bundles weighted scatter/feature/entity influences keyed by tag match. `AtmospherePalette` merges active profiles; the planner samples from the palette. Profiles loaded from `assets/rules/atmospheres.json`.
-- **Phase 4.3 — Room zones & InteriorPlan**: `InteriorPlan` partitions each room into zones (`Center`, `WallBand`, `Corner`, `DoorPath`, `Open`). Reserved door-to-door paths computed once via BFS — scatter and feature planner both exclude reserved cells for non-walkable/blocking placements. `doors_reachable` BFS retained as safety-net. Pipeline: rasterize → reserve paths → scatter → build interiors → feature plan.
-- **Phase 4.4 — Template interiors (constraint-based)**: `InteriorTemplate` declarative data model: match rooms by role/archetype/tag, assign zone→feature directives (`Place { feature_type, max_count }` or `Clear`). Templates loaded from `assets/rules/interior_templates.json` (6 starters: crypt_vault, sacred_chamber, storage_room, treasure_room, hub_hall, guard_post). Feature planner uses zone cells from `InteriorPlan` for template-matched rooms; `Clear` directives prevent blocking features in those zones. Atmosphere rules still apply after template placement (respecting clear zones). Templates configurable via `PipelineConfig.interior_templates`.
-- **Phase 4.5 — Irregular room shapes**: `ShapeRefinement` trait separates layout (WHERE rooms go) from shape (WHAT each room looks like). `RectShape` (no-op default) + `CaveIrregularizer` (carve corners, roughen edges, protect center cross, connectivity BFS). Rooms with `LocationKind::Cave` or atmosphere tag `"natural"` on rooms ≥ 7×7 get irregular footprints. `GeometryPlanner::plan` now takes `&mut dyn RngCore` for deterministic shape generation. Rasterizer gains `connect_doors_to_rooms` step: carves floor from each door inward until reaching existing floor, ensuring connectivity for irregular rooms. `SpatialPlan` carries `location_kind` from `MapIntent`. Geometry validator uses `space.rect` (not `footprint.bounding_rect()`) for boundary checks. Natural cave vocabulary now uses `LocationKind::Cave`.
+- **Phase 3 — Tile Registry & Data-Driven Rasterization** (tasks 3.1–3.8): `TileId(u16)` newtype, `TileRegistry` with properties, `TileMap` stores `Vec<TileId>`, JSON asset for tile definitions, extended palette (Water, Pit, Stairs, Rubble, Grass), tile scatter rules (connectivity-safe).
+- **Phase 4 — Room Character, Atmosphere & World-Engine Flexibility** (tasks 4.1–4.12): Feature registry (`FeatureType(String)` + `FeatureRegistry`), tag classification (structural/atmosphere/motifs), atmosphere profiles (weighted palettes per room), room zones + InteriorPlan, interior templates (6 starters), irregular room shapes (CaveIrregularizer), vermin cellar scenario, explicit pattern override, vocabulary overlays (base + override), additive rule injection, PipelineResult annotations (room letters + legend), situation directives (`PinEntity` for named quest entities). Proves the full design thesis: a world engine can control structure, compose themes, inject rules, pin entities, and read back annotated results — all without per-scenario code.
 
 ## Pipeline (current)
 
@@ -39,7 +35,8 @@ src/
 ├── demo/                # Scenario situation factories
 │   ├── crypt.rs         # build_crypt_situation() → SituationContext
 │   ├── tavern.rs        # build_tavern_situation() → SituationContext
-│   └── cave.rs          # build_cave_situation() → SituationContext
+│   ├── cave.rs          # build_cave_situation() → SituationContext
+│   └── cellar.rs        # build_cellar_situation() → SituationContext
 ├── situation/           # World/narrative context
 │   └── mod.rs           # SituationContext struct + builder methods
 ├── intent/              # Map intent / structural graph
@@ -144,14 +141,16 @@ These live on the types they belong to — no separate utility module:
 cargo run                          # Prints ASCII map (default: crypt)
 cargo run -- tavern                # Prints tavern cellar map
 cargo run -- cave                  # Prints natural cave map
+cargo run -- cellar                # Prints rat-infested port cellar map
 cargo run -- --seed 42             # Deterministic generation with seed
 cargo run -- crypt --seed 42       # Explicit scenario + seed
+cargo run -- --annotate            # Room letters on map + legend below
 cargo run -- --trace               # INFO-level pipeline trace (to stderr)
 cargo run -- --trace debug         # DEBUG-level (placement details, routing decisions)
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (349 currently: 268 unit/proptest + 23 regression + 54 integration + 4 doctests)
+cargo test       # Runs all tests (392 currently: 295 unit/proptest + 23 regression + 70 integration + 4 doctests)
 ```
 
 ## Target Architecture

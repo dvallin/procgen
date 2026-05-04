@@ -326,6 +326,7 @@ mod tests {
     fn make_entity(archetype: &str, x: i32, y: i32) -> EntityPlacement {
         EntityPlacement {
             archetype: EntityArchetypeId::from(archetype),
+            name: None,
             position: Point { x, y },
             space_id: SpaceId(0),
             behavior_tags: vec![],
@@ -521,6 +522,7 @@ mod tests {
         let entities = EntityPlan {
             entities: vec![EntityPlacement {
                 archetype: EntityArchetypeId::from("skeleton"),
+                name: None,
                 position: Point { x: 3, y: 3 },
                 space_id: SpaceId(0),
                 behavior_tags: vec![],

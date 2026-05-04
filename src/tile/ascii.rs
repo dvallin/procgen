@@ -104,6 +104,85 @@ pub fn entity_char(archetype: &EntityArchetypeId) -> char {
     }
 }
 
+/// Renders a `TileMap` with feature/entity overlays AND room letter annotations.
+///
+/// Each room's assigned letter is overlaid at its center point on the map.
+/// Below the map, a legend is printed listing each room's letter, label, and role.
+///
+/// Format:
+/// ```text
+/// [A] Crypt Entrance (Entry) *
+/// [B] Ossuary (Hub)
+/// [C] Family Vault (Goal) !
+/// ```
+///
+/// `*` marks the entry room, `!` marks the primary goal.
+pub fn render_ascii_annotated(
+    map: &TileMap,
+    features: &crate::feature::plan::FeaturePlan,
+    entities: &crate::entity::plan::EntityPlan,
+    tile_registry: &TileRegistry,
+    feature_registry: &FeatureRegistry,
+    annotations: &[crate::pipeline::RoomAnnotation],
+) -> String {
+    use std::collections::HashMap as OverlayMap;
+
+    // Build overlay: features first, then entities (entities win ties).
+    let mut overlay: OverlayMap<Point, char> = OverlayMap::new();
+    for placement in &features.features {
+        let ch = feature_registry.ascii_char(&placement.feature_type);
+        for &cell in &placement.cells {
+            overlay.insert(cell, ch);
+        }
+    }
+    for entity in &entities.entities {
+        let ch = entity_char(&entity.archetype);
+        overlay.insert(entity.position, ch);
+    }
+
+    // Room letter overlays take highest priority.
+    for ann in annotations {
+        overlay.insert(ann.center, ann.letter);
+    }
+
+    // Render map
+    let mut out = String::new();
+    for y in 0..map.height as i32 {
+        for x in 0..map.width as i32 {
+            let pt = Point { x, y };
+            let ch = if let Some(&oc) = overlay.get(&pt) {
+                oc
+            } else {
+                tile_registry.ascii_char(map.get(x, y).unwrap_or(TileId(0)))
+            };
+            out.push(ch);
+        }
+        out.push('\n');
+    }
+
+    // Legend
+    out.push('\n');
+    for ann in annotations {
+        let label = ann.label.as_deref().unwrap_or("<unnamed>");
+        let role = format!("{:?}", ann.role);
+        let flags = match (ann.is_entry, ann.is_goal) {
+            (true, _) => " *",
+            (_, true) => " !",
+            _ => "",
+        };
+        out.push_str(&format!("[{}] {} ({}){}", ann.letter, label, role, flags));
+        out.push('\n');
+
+        // List named entities in this room.
+        for ne in &ann.named_entities {
+            out.push_str(&format!("    >> {} ({})", ne.name, ne.archetype.0));
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +341,7 @@ mod tests {
             entities: vec![
                 crate::entity::plan::EntityPlacement {
                     archetype: EntityArchetypeId::from("skeleton"),
+                    name: None,
                     position: Point { x: 2, y: 2 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![],
@@ -269,6 +349,7 @@ mod tests {
                 },
                 crate::entity::plan::EntityPlacement {
                     archetype: EntityArchetypeId::from("rat"),
+                    name: None,
                     position: Point { x: 3, y: 3 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![],
@@ -293,6 +374,7 @@ mod tests {
         let entities = EntityPlan {
             entities: vec![crate::entity::plan::EntityPlacement {
                 archetype: EntityArchetypeId::from("skeleton_guardian"),
+                name: None,
                 position: Point { x: 2, y: 2 }, // same cell as the altar
                 space_id: SpaceId(0),
                 behavior_tags: vec![],

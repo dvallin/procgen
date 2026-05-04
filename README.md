@@ -10,9 +10,11 @@ A story-driven procedural map generator written in Rust. Given a high-level narr
 cargo run                     # Generate a Noble Crypt (default)
 cargo run -- tavern           # Generate a Tavern Cellar
 cargo run -- cave             # Generate a Natural Cave
+cargo run -- cellar           # Rat-Infested Port Cellar (with Skrag the Rat King)
 cargo run -- cave --seed 42   # Deterministic output with fixed seed
+cargo run -- --annotate       # Room letters on map + legend with named entities
 cargo run -- --trace          # Show pipeline stages (to stderr)
-cargo test                    # Run all 349 tests
+cargo test                    # Run all 392 tests
 ```
 
 ### Example Output (cave, seed 3)
@@ -73,6 +75,7 @@ cargo test                    # Run all 349 tests
 | `r` | Rat |
 | `G` | Guardian |
 | `@` | Smuggler |
+| `>>` | Named entity (in legend) |
 | `M` | Mimic |
 
 ---
@@ -130,7 +133,7 @@ ASCII Output
 2. **Feature rules** — role/archetype/tag matching (chest in Reward rooms)
 3. **Atmosphere contributions** — sampled from matched profiles (moss, vines, crystals)
 
-**8. EntityPlan** — Creatures placed in rooms. Skeletons, rats, guardians — driven by rules matching on roles and tags, plus atmosphere contributions. Entry rooms are kept safe.
+**8. EntityPlan** — Creatures placed in rooms. Skeletons, rats, guardians — driven by rules matching on roles and tags, plus atmosphere contributions. Situation directives can pin named entities into specific rooms (e.g. "Skrag the Rat King" → Goal room). Entry rooms are kept safe (unless explicitly overridden by a directive).
 
 ---
 
@@ -435,6 +438,7 @@ To add a new scenario you need:
 1. **A situation factory** (`src/demo/your_scenario.rs`) — returns a `SituationContext` with tags
 2. **A theme vocabulary** (entry in `assets/vocabularies/themes.json`) — maps roles to themed rooms
 3. Optionally: new entries in feature/entity rules, atmosphere profiles, or interior templates for scenario-specific content
+4. Optionally: **situation directives** — pin named quest entities into specific rooms via `SituationDirective::PinEntity`
 
 The narrative pattern is selected automatically from your situation tags via weighted voting — you don't need a new pattern unless your dungeon has a fundamentally different structure.
 
@@ -460,7 +464,7 @@ The narrative pattern is selected automatically from your situation tags via wei
 cargo run                          # Default scenario
 cargo run -- cave --seed 42        # Fixed seed for reproducibility
 cargo run -- --trace debug         # Pipeline trace with placement details
-cargo test                         # 349 tests (unit + property-based + integration)
+cargo test                         # 392 tests (unit + property-based + integration)
 ```
 
 ### Tracing Levels

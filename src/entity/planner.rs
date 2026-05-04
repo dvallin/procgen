@@ -16,6 +16,7 @@ use crate::feature::plan::FeaturePlan;
 use crate::feature::registry::FeatureType;
 use crate::geometry::geom::{GeometryPlan, Point, Rect};
 use crate::intent::graph::NodeRole;
+use crate::situation::SituationDirective;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
 use crate::tile::map::TileMap;
 use crate::tile::registry::Tile;
@@ -38,6 +39,7 @@ pub trait EntityPlanner {
         features: &FeaturePlan,
         rules: &[EntityRule],
         per_room_rules: &HashMap<SpaceId, Vec<EntityRule>>,
+        directives: &[SituationDirective],
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError>;
 }
@@ -59,6 +61,7 @@ impl EntityPlanner for SimpleEntityPlanner {
         features: &FeaturePlan,
         rules: &[EntityRule],
         per_room_rules: &HashMap<SpaceId, Vec<EntityRule>>,
+        directives: &[SituationDirective],
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError> {
         let _span = info_span!("entity_planning", rooms = geometry.spaces.len()).entered();
@@ -87,6 +90,62 @@ impl EntityPlanner for SimpleEntityPlanner {
         };
 
         let mut entities = Vec::new();
+
+        // ── Process pinned entity directives ────────────────────────────
+        // Pinned entities bypass normal budget/weight logic and are guaranteed
+        // to appear in a room matching the target role.
+        for directive in directives {
+            match directive {
+                SituationDirective::PinEntity {
+                    archetype,
+                    name,
+                    target_role,
+                } => {
+                    // Find the first placed space whose role matches target_role.
+                    let target_space = geometry.spaces.iter().find(|placed| {
+                        spec_map
+                            .get(&placed.space_id)
+                            .map(|s| s.role == *target_role)
+                            .unwrap_or(false)
+                    });
+
+                    if let Some(placed) = target_space {
+                        let candidate = find_center_floor(tiles, placed.rect, &global_occupied)
+                            .or_else(|| {
+                                let candidates =
+                                    find_walkable_floor(tiles, placed.rect, &global_occupied);
+                                pick_furthest_from_occupied(candidates, &global_occupied)
+                            });
+
+                        if let Some(point) = candidate {
+                            global_occupied.insert(point);
+                            entities.push(EntityPlacement {
+                                archetype: archetype.clone(),
+                                name: Some(name.clone()),
+                                position: point,
+                                space_id: placed.space_id,
+                                behavior_tags: vec![],
+                                patrol_zone: None,
+                            });
+                            debug!(
+                                archetype = %archetype,
+                                name = %name,
+                                role = ?target_role,
+                                space_id = ?placed.space_id,
+                                position = ?point,
+                                "pinned entity placed"
+                            );
+                        } else {
+                            return Err(EntityPlanError::NoWalkableTiles {
+                                space_id: placed.space_id,
+                            });
+                        }
+                    }
+                    // If no room with the target role exists, silently skip
+                    // (the pattern may not have produced that role).
+                }
+            }
+        }
 
         for placed in &geometry.spaces {
             let Some(spec) = spec_map.get(&placed.space_id) else {
@@ -255,6 +314,7 @@ fn place_entity_rule(
                 occupied.insert(point);
                 entities.push(EntityPlacement {
                     archetype: rule.archetype.clone(),
+                    name: None,
                     position: point,
                     space_id: ctx.space_id,
                     behavior_tags: rule.behavior_tags.clone(),
@@ -547,6 +607,7 @@ mod tests {
                 &features,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -591,6 +652,7 @@ mod tests {
                 &features,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -652,6 +714,7 @@ mod tests {
                 &features,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -696,6 +759,7 @@ mod tests {
                 &features,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -739,6 +803,7 @@ mod tests {
                 &features,
                 &rules,
                 &std::collections::HashMap::new(),
+                &[],
                 &mut rng,
             )
             .unwrap();
@@ -812,6 +877,7 @@ mod tests {
             &features,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
             &mut rng,
         );
         assert!(

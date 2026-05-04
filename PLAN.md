@@ -8,36 +8,31 @@ A story-driven procedural generator where narrative signals steer every decision
 
 ## Where We Are
 
-The pipeline skeleton is complete and validated. Three demo scenarios (crypt, tavern, cave) flow through all layers and produce ASCII output. 309 tests (property-based + integration + regression + doctests) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phases 1–3 are complete.**
+The pipeline skeleton is complete and validated. Four demo scenarios (crypt, tavern, cave, cellar) flow through all layers and produce ASCII output. 392 tests (property-based + integration + regression + doctests) confirm layer invariants hold for arbitrary inputs. Seeded RNG ensures reproducibility. **Phases 1–4 are complete.**
 
 ```
-SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap (+scatter) → FeaturePlan → EntityPlan → ASCII
+SituationContext → IntentBuilder → MapIntent → SpatialPlan → GeometryPlan → TileMap (+scatter) → InteriorPlan → FeaturePlan → EntityPlan → ASCII
 ```
 
-**What works:**
+**Completed capabilities:**
 - Full pipeline runner with retry semantics and seeded RNG
-- Data-driven intent generation: pattern selection → vocabulary lookup → slot filling → constraint inference → MapIntent assembly
-- Geometry placement with constraint-aware layout and corridor routing
-- Feature placement (furniture, traps, decorations) driven by role/tag rules
-- Entity placement (monsters, NPCs) with patrol zones and safe entry rooms
+- Data-driven intent generation: pattern selection → vocabulary lookup → slot filling → constraint inference
+- 5 narrative patterns (JSON), weighted voting + explicit override via `bindings["pattern"]`
+- 3 theme vocabularies + overlay inheritance (`base` field for DRY vocabulary composition)
+- Tile registry (`TileId(u16)` + `TileRegistry`) with JSON-defined tiles and scatter rules
+- Feature registry (`FeatureType(String)` + `FeatureRegistry`) with JSON-defined feature types
+- Atmosphere profiles: weighted scatter/feature/entity palettes, tag-matched, sampled per room
+- Room zones (InteriorPlan) + interior templates (6 starters, zone→feature directives)
+- Irregular room shapes (CaveIrregularizer for cave/natural rooms)
+- Entity placement with patrol zones, safe entry rooms, density caps
 - Validators at geometry, feature, and entity levels
+- Additive rule injection: `PipelineConfig.additional_{feature_rules,entity_rules,atmospheres}`
+- PipelineResult annotations: room labels, roles, positions, named entities
+- Situation directives: `PinEntity` guarantees named entities in target rooms
 - Property-based stress tests with random spatial plans
-- Two regression scenarios: Noble Crypt (lock-and-key), Tavern Cellar (hub-and-spoke)
-- Data-driven rules: Feature/entity rules loaded from JSON assets
-- Asset loader: Generic `load_rules<T>()` with file + embedded fallback
-- Pipeline rule overrides: `PipelineConfig.feature_rules` / `.entity_rules` let callers inject custom rule sets
-- 5 narrative patterns as JSON, pattern selector with weighted voting + RNG tiebreaking
-- 2 theme vocabularies with role-indexed entries (labels, tags, archetypes, location_kind, motifs)
-- `Pipeline::run()` uses `GenericIntentBuilder` internally; no hard-coded builders remain
+- Four demo scenarios: crypt, tavern, cave, cellar (with Skrag the Rat King pinned into Goal)
 
-- Tile registry: `TileId(u16)` + `TileRegistry` with JSON-defined tile types (walkable, opaque, ascii_char, tags)
-- Extended palette: Water, Pit, Stairs, Rubble, Grass — all as real tiles in the `TileMap`
-- Tile scatter rules: data-driven floor→terrain replacement during rasterization (connectivity-safe for non-walkable tiles)
-- Registry-aware ASCII renderer (`render_ascii_full`)
-- Proper tiles/features separation: tiles ARE the ground; features are objects ON tiles
-
-**What's next (Phase 4):**
-- Narrative Room Character & Atmosphere
+**What's next: Phase 5 — Pacing, Composition & Scale**
 
 ---
 
@@ -140,9 +135,9 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 
 ---
 
-### Phase 4: Motifs & Room Composition
+### Phase 4: Room Character, Atmosphere & World-Engine Flexibility ✅
 
-**Goal:** Rooms gain spatial identity through constrained templates and zones. Features become data-driven like tiles. Motifs begin to influence structure, not just decoration. Tags gain classification so their intent is visible.
+**Goal:** Rooms gain spatial identity through constrained templates and zones. Features become data-driven like tiles. The engine becomes flexible enough for a world engine to compose themes, control structure, inject quest content, and read back semantic results — all without per-scenario code.
 
 | # | Task | Description |
 |---|---|---|
@@ -151,15 +146,21 @@ A core tension in this system: what stays as Rust enums/traits (compile-time, ex
 | 4.3 | **Room zones & InteriorPlan** | ✅ | `InteriorPlan { space_id, rect, zones, doors, reserved_paths, path_intents }`. Zones partition a room's interior into `ZoneKind::{Center, WallBand, Corner, DoorPath, Open}`. Reserved paths (door-to-door BFS shortest paths) are pre-computed once and enforced by both scatter (non-walkable tiles never placed on reserved cells) and the feature planner (blocking features excluded from reserved cells via `pick_candidate`). `doors_reachable` BFS retained as safety-net validation. Computed after rasterization+scatter, consumed by FeaturePlan. |
 | 4.4 | **Template interiors (constraint-based)** | ✅ | Not fixed prefabs — declarative templates with spatial constraints. E.g. `crypt_vault: { center: altar, wall-band: candles, clear: door-path }`. `tavern_storage: { wall-band: shelves, corners: barrels, center: clear }`. Templates produce an `InteriorPlan`; the feature planner respects it. |
 | 4.5 | **Irregular room shapes** | ✅ | Introduce `ShapeRefinement` trait as a composable per-room shape transform. `CaveIrregularizer` is the first non-trivial implementation: starts with a rect, carves corners, roughens edges, preserves connectivity. Rooms with `LocationKind::Cave` or tag `"natural"` use it. Fixes the "office building under moss" look. Architecture separates layout (WHERE rooms go) from shape (WHAT each room looks like) — future algorithms (BSP, L-systems, cellular automata) can replace layout independently or compose with existing shape refinements. |
-| 4.6 | **MotifDirective** | `struct MotifDirective { motif: MotifId, scope: MotifScope, effects: Vec<MotifEffect> }`. Effects: `AddRoomTag`, `PreferArchetype`, `RequireFeature`, `AddTerrainScatter`, `AddEntityPressure`. Vocabularies can emit directives alongside labels/tags. **Application is phased explicitly:** intent-phase effects (PreferArchetype) run before spatial planning; spatial-phase effects (AddRoomTag) run before geometry; composition-phase effects (RequireFeature) run before feature planning; entity-phase effects (AddEntityPressure) run before entity planning. Not separate structs yet, but phase of application is a field on each effect. |
-| 4.7 | **New Scenario: Rat-Infested Port Cellar** | Extends the tavern vocabulary with a `"vermin"` motif. The motif adds `"infested"` tags to storage rooms, requires `"rat_nest"` features near food, adds rat entity pressure. Proves motif directives + atmosphere profiles produce coherent themed rooms without per-scenario code. |
+| 4.6 | **MotifDirective** | ⏭️ Scrapped | Analysis showed that vocabulary entries (which put tags on rooms per-role) + atmosphere profiles (which react to tags to produce placements) already cover the same ground. The `Composition`/`Entity`-phase effects (`RequireFeature`, `AddTerrainScatter`, `AddEntityPressure`) duplicate atmosphere profiles with less expressiveness (no placement strategy, no weights). The `Intent`/`Spatial`-phase effects (`AddRoomTag`, `PreferArchetype`) can be achieved by putting the right tags/archetypes directly in vocabulary entries. The one genuinely novel capability (cross-cutting `MatchTag` scope — reacting to tags you didn't put there) has no concrete scenario requiring it yet. Reintroduce if a future scenario can't be expressed without it. |
+| 4.7 | **New Scenario: Rat-Infested Port Cellar** | ✅ | New `vermin_cellar` vocabulary with `"infested"` tags on storage/food/hub rooms. New `vermin_infested` atmosphere profile (match tags: `infested`, `nest`) produces rat_nest features, barrel furniture, rat + giant_rat entities. `src/demo/cellar.rs` + CLI wiring (`cargo run -- cellar`). **Proves the design thesis:** vocabulary entries put the right tags on the right rooms → atmosphere profiles react to those tags → coherent themed content emerges. Zero per-scenario generation code needed beyond the 12-line situation factory. 4 integration tests validate connectivity, rat/nest presence, and atmosphere activation. |
+| 4.8 | **Explicit pattern override** | ✅ | Allow `bindings["pattern"]` to bypass tag-based voting and force a specific narrative pattern. Fallback: when absent, the current weighted-vote selector runs as before. **Demo change:** new integration test constructs a `vermin_cellar` situation with `pattern = "linear_descent"` and verifies the resulting graph is a linear chain (not hub-and-spoke). Proves a world engine can control dungeon *shape* independently of dungeon *theme*. |
+| 4.9 | **Vocabulary overlays** | ✅ | Replace monolithic vocabulary copies with composable layers. A `ThemeVocabulary` gains an optional `base: Option<String>` field; if present, it inherits all roles from the base and the overlay only specifies additions/overrides per role. **Demo change:** `vermin_cellar` vocabulary shrinks to `{ base: "urban_underground", roles: [only the overridden entries] }`. Existing `cargo run -- cellar` output is identical but the vocabulary file is smaller and DRY. New integration test: construct a novel overlay at runtime (inject via `PipelineConfig`) without pre-authoring a full vocabulary JSON — proves the world engine can compose themes dynamically. |
+| 4.10 | **Additive rule injection** | ✅ | `PipelineConfig` gains `additional_feature_rules`, `additional_entity_rules`, `additional_atmospheres` that are *merged* with defaults (not replacing them). **Demo change:** new integration test runs the crypt scenario with an injected `"cursed"` atmosphere profile (adds skeleton entities to all rooms with `"sacred"` tag). Verifies skeletons appear in the chapel without touching any JSON files. Proves a quest system can layer temporary effects onto the generator. |
+| 4.11 | **PipelineResult annotations** | ✅ | `PipelineResult` gains `annotations: Vec<RoomAnnotation>` carrying each room's label, role, structural tags, bounding rect, and door positions. Entry/exit rooms are flagged. **Demo change:** `cargo run -- --annotate` prints a legend below the ASCII map listing room labels + roles (e.g. `[A] Main Cellar (Hub) [B] Rat King's Den (Goal)`). Letters are overlaid on the map at room centers. Integration test verifies annotations are present and consistent with geometry. Proves the world engine can correlate map output with narrative graph nodes. |
+| 4.12 | **Situation directives (entity pinning)** | ✅ | `SituationContext` gains `directives: Vec<SituationDirective>`. First directive: `PinEntity { archetype, name, target_role }` — guarantees a named entity appears in a room matching the target role. Entity planner checks directives before rule-based placement; pinned entities bypass normal budget/weight logic. **Demo change:** cellar situation adds `PinEntity { archetype: "giant_rat", name: "Skrag the Rat King", target_role: Goal }`. `PipelineResult.annotations` includes named entity positions. Integration test verifies Skrag appears in the Goal room specifically. Proves a quest system can place quest targets deterministically. |
 
 **Design decisions:**
 - InteriorPlan is computed *after* GeometryPlan (needs concrete rect/footprint) but *before* FeaturePlan (features need zones). It sits alongside TileMap, not after it — the pipeline is a DAG from GeometryPlan onward.
 - Templates are matched by `(archetype, theme_tags)` — a room can fall back to rule-based placement if no template matches.
 - Irregular footprints are a geometry-layer concern; scatter + features work on any footprint shape via `Footprint::cells()` iterator.
-- MotifDirectives do NOT create new architectural seams between stages. They inject tags/requirements into existing data structures that downstream stages already read. But application is *phased*: each effect declares which pipeline stage it targets (intent, spatial, composition, feature, entity). This prevents spooky action at a distance.
+- **Vocabulary entries are the primary theming lever.** Tags on entries drive atmosphere profiles downstream. This is simpler and more transparent than a separate MotifDirective system — you can read a vocabulary entry and see exactly what tags it will produce, and then read the matching atmosphere profile to see what content that triggers.
 - Atmosphere profiles replace the proliferation of one-off tag→feature rules. A profile bundles scatter + features + entities into a coherent palette. The planner *samples from* the palette rather than deterministically firing every matching rule.
+- MotifDirectives were prototyped and scrapped: they duplicated atmosphere functionality with less expressiveness. The cross-cutting `MatchTag` capability (reacting to tags you didn't author) is the only novel affordance — reintroduce when a scenario needs it.
 
 **Geometry architecture (introduced in 4.5):**
 
@@ -190,29 +191,35 @@ GeometryPlanner (trait — public pipeline contract)
 | 4.5.3 | Wire shape refinement into `SimpleGeometryPlanner` | ✅ | After BFS placement, iterate `PlacedSpace`s. Select `ShapeRefinement` per room: `CaveIrregularizer` if `LocationKind::Cave` or tag `"natural"` on rooms ≥ 7×7, else `RectShape`. Propagate `LocationKind` via `SpatialPlan`. |
 | 4.5.4 | Downstream compatibility | ✅ | Verify/fix zone classification, scatter, feature placement, reserved paths for `Footprint::Cells`. Zones iterate actual floor cells, not rect interior. |
 | 4.5.5 | Tests | ✅ | Unit tests (connectivity, subset-of-rect, min-threshold, determinism). Proptest (any rect ≥ 5×5 produces connected result). Integration: `cargo run -- cave` shows non-rectangular rooms. Existing tests unaffected. |
-| 4.5.6 | Move shape refinement after routing (cleanup) | Run `apply_shape_refinement` AFTER `ZShapeRouter.route()` so the irregularizer knows door positions from corridor endpoints. `ShapeRefinement::refine` gains a `doors: &[Point]` parameter — the irregularizer protects cells on BFS paths from each door to the room center. Remove the protective cross hack and `connect_doors_to_rooms` rasterizer band-aid. Shape is correct by construction, not patched after the fact. No circular dependency: routing uses `space.rect` for exit faces, not `footprint`. |
+| 4.5.6 | Move shape refinement after routing (cleanup) | ⏭️ Skipped | The protected cross + `connect_doors_to_rooms` band-aid is cheap, correct, and keeps shape/routing decoupled. Revisit only if a future shape strategy breaks the "carve inward until floor" heuristic. |
 
 **Caution:** Tags must remain *soft intent*, not secret bytecode. When rules start needing negation, priority ordering everywhere, or "unless" clauses, the concept must be promoted into typed Rust. Tags are good for signaling; tags are bad as undocumented control flow.
 
-**Exit criterion:** Cave rooms have visibly irregular shapes. At least 2 room templates produce spatial layouts (not random scatter). A motif demonstrably alters room content across a scenario without per-scenario code. Reserved paths are validated: templates and required features cannot block door-to-door traversal. Tags are classified — structural vs. atmospheric intent is visible in data, not implicit.
+**Exit criterion:** Cave rooms have visibly irregular shapes. At least 2 room templates produce spatial layouts (not random scatter). Vocabulary entries + atmosphere profiles demonstrably produce coherent themed rooms across a scenario without per-scenario code (proven by the `cellar` scenario). Reserved paths are validated: templates and required features cannot block door-to-door traversal. Tags are classified — structural vs. atmospheric intent is visible in data, not implicit. A world engine can: (a) force a specific pattern independent of theme, (b) compose a vocabulary from base + overlay without monolithic copies, (c) inject additional rules at runtime, (d) read back room roles/labels/positions from the result, (e) pin a named quest entity into a specific role's room.
 
 ---
 
 ### Phase 5: Pacing, Composition & Scale
 
-**Goal:** Generate larger maps with narrative pacing — buildup, climax, release. Patterns compose into richer structures.
+**Goal:** Generate larger maps with narrative pacing — buildup, climax, release. Patterns compose into richer structures. The geometry layer scales gracefully to 10–15 rooms.
 
 | # | Task | Description |
 |---|---|---|
-| 5.1 | **Pattern Composition** | A slot in one pattern can expand into a sub-pattern. `MapScale` controls expansion budget: Tiny=1 pattern, Small=1+1 expansion, Medium=1+2, Large=recursive. |
-| 5.2 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry. Tag rooms with `tension: low/medium/high/climax`. |
-| 5.3 | **Tension-aware entity density** | Entity rules gain `match_tension: Option<TensionLevel>`. High-tension rooms get more/harder entities. Low-tension rooms stay sparse. |
-| 5.4 | **Rest points** | If critical path length > N, insert a `Reward`-role room mid-path (safe, contains supplies). Pattern-level insertion. |
-| 5.5 | **Pacing validator** | Warns if the tension curve is flat (boring), immediately maxed (unfair), or has no climax before the goal. |
-| 5.6 | **MotifEffect: structural** | Extend motif effects to alter graph structure: `BlockOrAlterLink` (collapse blocks a corridor, forcing detour), `AddSecondaryConnection` (add a shortcut or secret passage). Motifs now reach into MapIntent → SpatialPlan transitions. |
-| 5.7 | **New Scenario: Abandoned Mine** | Medium-scale (10–15 rooms). Main shaft (linear descent) + branching galleries (hub-and-spoke at depth). Tests pattern composition + pacing over a longer path. |
+| 5.1 | **Force-Directed Geometry Planner** | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `SimpleGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `SimpleGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
+| 5.2 | **Pattern Composition** | A slot in one pattern can expand into a sub-pattern. `MapScale` controls expansion budget: Tiny=1 pattern, Small=1+1 expansion, Medium=1+2, Large=recursive. Composed patterns produce 8–15 node graphs. |
+| 5.3 | **Entity Archetype Registry** | `assets/rules/entity_archetypes.json` defines entity archetypes: `{ id, display_char, difficulty_tier, behavior_tags, default_patrol }`. Tiers: `minion`, `standard`, `elite`, `boss`. The entity planner references archetypes by ID; the registry resolves display char and tier. Provides the variety needed for difficulty scaling. Existing `entities.json` rules reference these IDs (backward-compatible). |
+| 5.4 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry along the critical path. Tag rooms with `tension: low/medium/high/climax`. Tension is a computed property on `RoomAnnotation`, not a tag — it's structural, not content. Critical path = shortest Entry→Goal path in the structural graph. |
+| 5.5 | **Tension-aware entity density** | Entity rules gain `match_tension: Option<TensionLevel>`. High-tension rooms get more/harder entities (higher tier). Low-tension rooms stay sparse (minions only). Atmosphere profiles can also reference tension for scatter intensity (more rubble near climax). |
+| 5.6 | **Rest points** | If critical path length > N, insert a `Reward`-role room mid-path (safe, contains supplies). Pattern-level insertion during composition. Rest points get `tension: low` regardless of depth. |
+| 5.7 | **Pacing validator** | Warns if the tension curve is flat (no buildup), immediately maxed (unfair), or has no climax before the goal. Reports via `PipelineResult.annotations` so the world engine can react. |
+| 5.8 | **New Scenario: Abandoned Mine** | Medium-scale (10–15 rooms). Main shaft (linear descent) + branching galleries (hub-and-spoke at depth). Tests pattern composition + force-directed layout + pacing over a longer path. New vocabulary `abandoned_mine`. |
 
-**Exit criterion:** Medium-scale maps have measurable pacing curves visible in `--trace` output. Validator catches degenerate structures. A motif can structurally alter the graph (blocked passage, forced detour).
+**Design notes:**
+- 5.1 comes first because pattern composition (5.2) will produce 10–15 room graphs that the BFS column layout handles poorly. Better to have a solid geometry foundation before scaling up room count.
+- Entity archetype registry (5.3) provides the variety needed for tension-aware density (5.5) to be meaningful — without it, "harder entities" has nowhere to go.
+- Structural motif effects (graph mutations like `BlockOrAlterLink`, `AddSecondaryConnection`) are **deferred** — the same reasoning as Phase 4.6 applies: pattern selection + vocabulary already control structure. Reintroduce only if the Abandoned Mine scenario or a future scenario genuinely can't express its structure via pattern composition alone.
+
+**Exit criterion:** Medium-scale maps (10–15 rooms) have natural spatial layouts via force-directed placement, measurable pacing curves visible in `--trace` output, and tension-appropriate entity populations. Pacing validator catches degenerate structures.
 
 ---
 
@@ -240,10 +247,10 @@ GeometryPlanner (trait — public pipeline contract)
 | Noble Crypt | lock-and-key, undead theme | Foundation ✅ |
 | Tavern Cellar | branching, urban theme, secrets | Foundation ✅ |
 | Natural Cave | exploration, scatter terrain, irregular shapes | Phase 3 ✅ (shapes: Phase 4) |
-| Rat-Infested Port Cellar | motif directives, entity pressure, infested rooms | Phase 4 |
-| Wizard's Tower | vertical traversal, arcane theme, multi-level | Phase 5 |
-| Abandoned Mine | pattern composition, medium scale, pacing | Phase 5 |
-| Thieves' Guild | complex hub-and-spoke, traps, structural motifs | Phase 5 |
+| Rat-Infested Port Cellar | motif directives, entity pressure, infested rooms | Phase 4 ✅ |
+| Abandoned Mine | pattern composition, medium scale, pacing, force-directed layout | Phase 5 |
+| Wizard's Tower | vertical traversal, arcane theme, multi-level | Phase 6 |
+| Thieves' Guild | complex hub-and-spoke, traps, encounter budgets | Phase 6 |
 | Dragon's Lair | large scale, encounter budgets, boss room | Phase 6 |
 
 ---
@@ -296,7 +303,7 @@ enum Severity    { Error, Warning, Info }
 // Phase 3 (done): Tile enum collapsed to TileId + TileRegistry
 // TileId(u16) + TileRegistry { name, walkable, opaque, ascii_char, tags }
 
-// Phase 4 (planned): FeatureKind enum → feature_type: String + FeatureRegistry
+// Phase 4 (done): FeatureKind enum → feature_type: String + FeatureRegistry
 // FeatureCategory enum stays for behavior dispatch:
 enum FeatureCategory { Furniture, Container, Trap, Decoration, Interactable }
 // FeatureRegistry maps type name → { category, ascii_char, blocking, tags }

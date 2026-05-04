@@ -276,5 +276,39 @@
         "weight": 1.5
       }
     ]
+  },
+  {
+    "name": "vermin_infested",
+    "match_tags": ["infested", "nest"],
+    "priority": 1,
+    "scatter": [{ "target_tile": "rubble", "density": 0.08, "weight": 2.0 }],
+    "features": [
+      {
+        "feature_type": "rat_nest",
+        "strategy": "Corner",
+        "max_count": 2,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "barrel",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 1.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "rat",
+        "placement": "RandomFloor",
+        "max_count": 3,
+        "weight": 4.0
+      },
+      {
+        "archetype": "giant_rat",
+        "placement": "Center",
+        "max_count": 1,
+        "weight": 2.0
+      }
+    ]
   }
 ]

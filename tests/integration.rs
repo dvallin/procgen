@@ -1,3 +1,4 @@
+use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
 use procgen::geometry::geom::Point;
@@ -655,6 +656,684 @@ fn tavern_ascii_output_contains_feature_chars() {
     );
 }
 
+// ============================================================
+// Rat-Infested Port Cellar tests
+// ============================================================
+
+/// Helper: build the cellar MapIntent.
+fn build_cellar_intent() -> MapIntent {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+    let builder = GenericIntentBuilder::from_defaults().unwrap();
+    let situation = build_cellar_situation();
+    let mut rng = StdRng::seed_from_u64(0);
+    builder.build(&situation, &mut rng).unwrap()
+}
+
+/// Helper: run the full cellar pipeline and return the tile map.
+fn run_cellar_pipeline() -> procgen::tile::map::TileMap {
+    let intent = build_cellar_intent();
+    let spatial_plan = SimpleSpatialPlanner.plan(&intent).unwrap();
+    let geometry_plan = SimpleGeometryPlanner::default()
+        .plan(&spatial_plan, &mut StdRng::seed_from_u64(42))
+        .unwrap();
+    SimpleRasterizer
+        .rasterize(&geometry_plan, &TileRegistry::default_registry())
+        .unwrap()
+}
+
+#[test]
+fn cellar_intent_uses_vermin_cellar_vocabulary() {
+    let intent = build_cellar_intent();
+    assert_eq!(
+        intent.location_kind,
+        procgen::intent::map_intent::LocationKind::Building
+    );
+    // Should have nodes from the vermin_cellar vocabulary.
+    let labels: Vec<&str> = intent
+        .structural_graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.label.as_deref())
+        .collect();
+    // At least one label should reference something vermin/cellar-themed.
+    let has_themed_label = labels.iter().any(|l| {
+        l.contains("Cellar")
+            || l.contains("Rat")
+            || l.contains("Gnawed")
+            || l.contains("Pantry")
+            || l.contains("Grain")
+            || l.contains("Drain")
+            || l.contains("Warren")
+            || l.contains("Den")
+            || l.contains("Hatch")
+            || l.contains("Kitchen")
+    });
+    assert!(
+        has_themed_label,
+        "expected vermin-themed labels, got: {:?}",
+        labels
+    );
+}
+
+#[test]
+fn cellar_map_is_connected() {
+    let map = run_cellar_pipeline();
+
+    let start = (0..map.height as i32)
+        .flat_map(|y| (0..map.width as i32).map(move |x| Point { x, y }))
+        .find(|p| map.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+        .expect("map should have at least one walkable tile");
+
+    let reached = map.flood_fill(start, |t| t.is_walkable());
+    let total_walkable = map.tiles.iter().filter(|t| t.is_walkable()).count();
+
+    assert_eq!(
+        reached.len(),
+        total_walkable,
+        "cellar map not connected: reached {} of {} walkable tiles",
+        reached.len(),
+        total_walkable
+    );
+}
+
+#[test]
+fn cellar_full_pipeline_produces_rats_and_nests() {
+    use procgen::feature::registry::FeatureRegistry;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::tile::ascii::render_ascii;
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_cellar_situation();
+    let result = pipeline
+        .run(&situation)
+        .expect("cellar pipeline should succeed");
+
+    // The output should have rat entities.
+    let has_rats = result
+        .entities
+        .entities
+        .iter()
+        .any(|e| e.archetype.0 == "rat" || e.archetype.0 == "giant_rat");
+    assert!(has_rats, "cellar should spawn rat entities");
+
+    // The output should have rat_nest features.
+    let has_nests = result
+        .features
+        .features
+        .iter()
+        .any(|f| f.feature_type.0 == "rat_nest");
+    assert!(has_nests, "cellar should place rat_nest features");
+
+    // ASCII output should contain rat ('r') and nest ('~') characters.
+    let tile_registry = TileRegistry::default_registry();
+    let feature_registry = FeatureRegistry::default_registry();
+    let ascii = render_ascii(
+        &result.tiles,
+        &result.features,
+        &result.entities,
+        &tile_registry,
+        &feature_registry,
+    );
+    assert!(ascii.contains('r'), "ASCII should show rats");
+    assert!(ascii.contains('~'), "ASCII should show rat nests");
+}
+
+#[test]
+fn cellar_infested_rooms_get_vermin_atmosphere() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(7),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_cellar_situation();
+    let result = pipeline
+        .run(&situation)
+        .expect("cellar pipeline should succeed");
+
+    // Count rats across the map — infested rooms should generate more than baseline.
+    let rat_count = result
+        .entities
+        .entities
+        .iter()
+        .filter(|e| e.archetype.0 == "rat" || e.archetype.0 == "giant_rat")
+        .count();
+    // With multiple infested rooms, we expect at least 3 rat entities.
+    assert!(
+        rat_count >= 3,
+        "expected at least 3 rats across infested rooms, got {}",
+        rat_count
+    );
+}
+
+#[test]
+fn cellar_with_pattern_override_produces_connected_map() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::situation::SituationContext;
+    use procgen::tag::Tag;
+
+    // Same cellar theme, but force linear_descent pattern instead of hub_and_spoke.
+    let situation = SituationContext::new(vec![
+        Tag::from("tavern"),
+        Tag::from("cellar"),
+        Tag::from("dock_district"),
+        Tag::from("infested"),
+        Tag::from("vermin"),
+    ])
+    .with_binding("location", "port_cellar")
+    .with_binding("theme", "vermin_cellar")
+    .with_binding("pattern", "linear_descent");
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline
+        .run(&situation)
+        .expect("cellar with linear_descent should succeed");
+
+    // Map must be connected.
+    let start = (0..result.tiles.height as i32)
+        .flat_map(|y| (0..result.tiles.width as i32).map(move |x| Point { x, y }))
+        .find(|p| result.tiles.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+        .expect("map should have walkable tiles");
+
+    let reached = result.tiles.flood_fill(start, |t| t.is_walkable());
+    let total_walkable = result
+        .tiles
+        .tiles
+        .iter()
+        .filter(|t| t.is_walkable())
+        .count();
+
+    assert_eq!(
+        reached.len(),
+        total_walkable,
+        "pattern-override cellar map not connected: reached {} of {} walkable",
+        reached.len(),
+        total_walkable
+    );
+
+    // Should still have rats (vermin atmosphere still fires from tags).
+    let has_rats = result
+        .entities
+        .entities
+        .iter()
+        .any(|e| e.archetype.0 == "rat" || e.archetype.0 == "giant_rat");
+    assert!(has_rats, "pattern-override cellar should still have rats");
+}
+
+#[test]
+fn runtime_vocabulary_overlay_injection() {
+    use procgen::asset::load::{load_default_patterns, load_default_vocabularies};
+    use procgen::intent::builder::IntentBuilder;
+    use procgen::intent::generic_builder::GenericIntentBuilder;
+    use procgen::intent::graph::NodeRole;
+    use procgen::intent::map_intent::LocationKind;
+    use procgen::intent::vocabulary::{RoleVocabulary, ThemeVocabulary, VocabularyEntry};
+    use procgen::situation::SituationContext;
+    use procgen::spatial::plan::SpaceArchetype;
+    use procgen::tag::Tag;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    // Load defaults, then inject a runtime overlay that extends urban_underground.
+    let patterns = load_default_patterns().unwrap();
+    let mut vocabularies = load_default_vocabularies().unwrap();
+
+    // A world engine creates this at runtime: "haunted tavern" overlay
+    let haunted_overlay = ThemeVocabulary {
+        id: "haunted_tavern".to_string(),
+        name: "Haunted Tavern".to_string(),
+        description: "Runtime-injected overlay".to_string(),
+        base: Some("urban_underground".to_string()),
+        location_kind: LocationKind::Building,
+        motifs: vec!["haunted".to_string(), "damp".to_string()],
+        roles: vec![
+            RoleVocabulary {
+                role: NodeRole::Goal,
+                entries: vec![VocabularyEntry {
+                    label: "Cursed Cellar".to_string(),
+                    tags: vec!["main_goal".to_string(), "cursed".to_string()],
+                    archetype: SpaceArchetype::Chamber,
+                }],
+            },
+            RoleVocabulary {
+                role: NodeRole::Branch,
+                entries: vec![VocabularyEntry {
+                    label: "Ghost Chamber".to_string(),
+                    tags: vec!["optional".to_string(), "haunted".to_string()],
+                    archetype: SpaceArchetype::Chamber,
+                }],
+            },
+        ],
+    };
+    vocabularies.push(haunted_overlay);
+
+    let builder = GenericIntentBuilder::new(patterns, vocabularies);
+    let situation = SituationContext::new(vec![Tag::from("tavern"), Tag::from("dock_district")])
+        .with_binding("theme", "haunted_tavern")
+        .with_binding("pattern", "hub_and_spoke");
+
+    let mut rng = StdRng::seed_from_u64(42);
+    let intent = builder.build(&situation, &mut rng).unwrap();
+
+    // Should be Building (from overlay).
+    assert_eq!(intent.location_kind, LocationKind::Building);
+
+    // Should have base urban_underground entries available + overlay entries.
+    let labels: Vec<&str> = intent
+        .structural_graph
+        .nodes
+        .iter()
+        .filter_map(|n| n.label.as_deref())
+        .collect();
+
+    // The Hub should come from base (Taproom Cellar / Storage Basement)
+    // OR overlay (no Hub override, so only base).
+    // Goal should include "Cursed Cellar" (overlay) or base goals.
+    // Branch should include "Ghost Chamber" (overlay) or base branches.
+    let has_base_or_overlay = labels.iter().any(|l| {
+        // Base entries
+        l.contains("Cellar") || l.contains("Storeroom") || l.contains("Pantry") ||
+        l.contains("Cold Room") || l.contains("Wine") || l.contains("Contraband") ||
+        // Overlay entries
+        l.contains("Cursed") || l.contains("Ghost")
+    });
+    assert!(
+        has_base_or_overlay,
+        "expected base or overlay labels, got: {:?}",
+        labels
+    );
+
+    // Motifs should be from overlay.
+    let motif_strs: Vec<&str> = intent.motifs.iter().map(|m| m.0.as_str()).collect();
+    assert!(motif_strs.contains(&"haunted"));
+}
+
+// ─── Annotation tests ────────────────────────────────────────────────────────
+
+#[test]
+fn crypt_annotations_present_and_consistent() {
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_crypt_situation();
+    let result = pipeline.run(&situation).expect("crypt should succeed");
+
+    // Annotations should be non-empty and match geometry space count.
+    assert!(
+        !result.annotations.is_empty(),
+        "annotations should be non-empty"
+    );
+    assert_eq!(
+        result.annotations.len(),
+        result.geometry.spaces.len(),
+        "annotations count should match geometry spaces"
+    );
+
+    // Each annotation should have a unique letter.
+    let letters: Vec<char> = result.annotations.iter().map(|a| a.letter).collect();
+    let unique_letters: std::collections::HashSet<char> = letters.iter().cloned().collect();
+    assert_eq!(
+        letters.len(),
+        unique_letters.len(),
+        "all annotation letters should be unique"
+    );
+
+    // Letters should start at 'A' and be consecutive.
+    for (i, ann) in result.annotations.iter().enumerate() {
+        assert_eq!(
+            ann.letter,
+            (b'A' + i as u8) as char,
+            "annotation {} should have letter '{}'",
+            i,
+            (b'A' + i as u8) as char
+        );
+    }
+
+    // There should be exactly one Entry room flagged.
+    let entries: Vec<_> = result.annotations.iter().filter(|a| a.is_entry).collect();
+    assert_eq!(entries.len(), 1, "should have exactly one Entry annotation");
+    assert_eq!(
+        entries[0].role,
+        NodeRole::Entry,
+        "entry-flagged annotation should have Entry role"
+    );
+
+    // Center points should be inside the room rects.
+    for ann in &result.annotations {
+        assert!(
+            ann.center.x >= ann.rect.x
+                && ann.center.x < ann.rect.x + ann.rect.w
+                && ann.center.y >= ann.rect.y
+                && ann.center.y < ann.rect.y + ann.rect.h,
+            "annotation center {:?} should be inside rect {:?}",
+            ann.center,
+            ann.rect
+        );
+    }
+
+    // Rects should match the geometry plan.
+    for ann in &result.annotations {
+        let placed = result
+            .geometry
+            .spaces
+            .iter()
+            .find(|p| p.space_id == ann.space_id)
+            .expect("annotation space_id should match a geometry space");
+        assert_eq!(
+            ann.rect, placed.rect,
+            "annotation rect should match geometry rect"
+        );
+    }
+
+    // Labels should be present (from vocabulary).
+    for ann in &result.annotations {
+        assert!(
+            ann.label.is_some(),
+            "all crypt annotations should have labels (vocabulary provides them)"
+        );
+    }
+}
+
+#[test]
+fn cellar_annotations_have_entry_and_goal() {
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_cellar_situation();
+    let result = pipeline.run(&situation).expect("cellar should succeed");
+
+    // Should have at least one entry and one goal.
+    let has_entry = result.annotations.iter().any(|a| a.is_entry);
+    let has_goal = result.annotations.iter().any(|a| a.is_goal);
+    assert!(has_entry, "cellar should have an entry annotation");
+    assert!(has_goal, "cellar should have a goal annotation");
+
+    // Goal annotation should have main_goal structural tag.
+    let goal_ann = result
+        .annotations
+        .iter()
+        .find(|a| a.is_goal)
+        .expect("should have a goal annotation");
+    assert_eq!(
+        goal_ann.role,
+        NodeRole::Goal,
+        "goal-flagged annotation should have Goal role"
+    );
+
+    // Doors should be non-empty for rooms that have corridors connecting to them.
+    let rooms_with_doors: Vec<_> = result
+        .annotations
+        .iter()
+        .filter(|a| !a.doors.is_empty())
+        .collect();
+    assert!(
+        !rooms_with_doors.is_empty(),
+        "at least some rooms should have detected doors"
+    );
+}
+
+#[test]
+fn annotated_render_contains_letters_and_legend() {
+    use procgen::feature::registry::FeatureRegistry;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::tile::ascii::render_ascii_annotated;
+    use procgen::tile::registry::TileRegistry;
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_crypt_situation();
+    let result = pipeline.run(&situation).expect("crypt should succeed");
+
+    let tile_registry = TileRegistry::default_registry();
+    let feature_registry = FeatureRegistry::default_registry();
+    let output = render_ascii_annotated(
+        &result.tiles,
+        &result.features,
+        &result.entities,
+        &tile_registry,
+        &feature_registry,
+        &result.annotations,
+    );
+
+    // Map output should contain the room letters.
+    for ann in &result.annotations {
+        assert!(
+            output.contains(ann.letter),
+            "annotated output should contain letter '{}'",
+            ann.letter
+        );
+    }
+
+    // Legend should contain labels and role names.
+    for ann in &result.annotations {
+        if let Some(label) = &ann.label {
+            assert!(
+                output.contains(label.as_str()),
+                "legend should contain label '{}'",
+                label
+            );
+        }
+        let role_str = format!("{:?}", ann.role);
+        assert!(
+            output.contains(&role_str),
+            "legend should contain role '{}'",
+            role_str
+        );
+    }
+
+    // Legend should mark entry with '*'.
+    assert!(
+        output.contains(" *"),
+        "legend should mark entry room with '*'"
+    );
+}
+
+#[test]
+fn additive_atmosphere_injection_cursed_skeletons_in_sacred_rooms() {
+    use procgen::atmosphere::profile::{AtmosphereProfile, EntityInfluence};
+    use procgen::entity::plan::EntityArchetypeId;
+    use procgen::entity::rules::EntityPlacementStrategy;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::tag::Tag;
+
+    // Build a "cursed" atmosphere profile that targets rooms with "bones" tag
+    // (the Ossuary in the crypt vocabulary reliably has this tag). Injects a
+    // unique "cursed_skeleton" entity that only exists via this injection.
+    // This simulates a quest system layering temporary effects onto the
+    // generator without touching any JSON files.
+    let cursed_profile = AtmosphereProfile {
+        name: "cursed".to_string(),
+        match_tags: vec![Tag::from("bones"), Tag::from("sacred")],
+        priority: 10, // high priority so it fires reliably
+        scatter: vec![],
+        features: vec![],
+        entities: vec![EntityInfluence {
+            archetype: EntityArchetypeId::from("cursed_skeleton"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            max_count: 3,
+            weight: 10.0, // high weight to ensure sampling picks it
+        }],
+    };
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        additional_atmospheres: vec![cursed_profile],
+        atmosphere_sample_budget: 5, // more samples to increase chance of placement
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_crypt_situation();
+    let result = pipeline
+        .run(&situation)
+        .expect("crypt with cursed atmosphere injection should succeed");
+
+    // The crypt vocabulary has the Ossuary (Hub) with "bones" atmosphere tag.
+    // The injected cursed atmosphere should produce cursed_skeleton entities
+    // that would NOT appear without the injection.
+    let cursed_entities: Vec<_> = result
+        .entities
+        .entities
+        .iter()
+        .filter(|e| e.archetype.0 == "cursed_skeleton")
+        .collect();
+
+    assert!(
+        !cursed_entities.is_empty(),
+        "injected cursed atmosphere should produce cursed_skeleton entities via additional_atmospheres"
+    );
+
+    // Verify that the base feature rules still work (table should appear in Hub).
+    let has_table = result
+        .features
+        .features
+        .iter()
+        .any(|f| f.feature_type.0 == "table");
+    assert!(
+        has_table,
+        "base feature rules should still produce table in Hub (injection is additive)"
+    );
+
+    // Map should still be connected (injection doesn't break generation).
+    let start = (0..result.tiles.height as i32)
+        .flat_map(|y| (0..result.tiles.width as i32).map(move |x| Point { x, y }))
+        .find(|p| result.tiles.get(p.x, p.y).is_some_and(|t| t.is_walkable()))
+        .expect("map should have walkable tiles");
+    let reached = result.tiles.flood_fill(start, |t| t.is_walkable());
+    let total_walkable = result
+        .tiles
+        .tiles
+        .iter()
+        .filter(|t| t.is_walkable())
+        .count();
+    assert_eq!(
+        reached.len(),
+        total_walkable,
+        "crypt with cursed injection should remain connected"
+    );
+}
+
+#[test]
+fn additive_feature_rules_injection() {
+    use procgen::feature::placement::PlacementStrategy;
+    use procgen::feature::registry::FeatureType;
+    use procgen::feature::rules::FeatureRule;
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    // Inject a feature rule that places a "cursed_idol" in any Entry room.
+    // Entry is always present and never matches an interior template, so
+    // the base rule path fires reliably.
+    let cursed_idol_rule = FeatureRule {
+        feature_type: FeatureType::from("cursed_idol"),
+        strategy: PlacementStrategy::RandomFloor,
+        required: false,
+        max_count: 2,
+        match_role: Some(NodeRole::Entry),
+        match_archetype: None,
+        match_tag: None,
+    };
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        additional_feature_rules: vec![cursed_idol_rule],
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_crypt_situation();
+    let result = pipeline
+        .run(&situation)
+        .expect("crypt with additional feature rule should succeed");
+
+    // The injected rule should place cursed_idol in the Entry room.
+    let has_cursed_idol = result
+        .features
+        .features
+        .iter()
+        .any(|f| f.feature_type.0 == "cursed_idol");
+    assert!(
+        has_cursed_idol,
+        "injected additional_feature_rules should produce cursed_idol in Entry room"
+    );
+
+    // Base rules should still produce table in Hub (via hub_hall template).
+    let has_table = result
+        .features
+        .features
+        .iter()
+        .any(|f| f.feature_type.0 == "table");
+    assert!(
+        has_table,
+        "base feature rules should still produce table (injection is additive)"
+    );
+}
+
+#[test]
+fn additive_entity_rules_injection() {
+    use procgen::entity::plan::EntityArchetypeId;
+    use procgen::entity::rules::{EntityPlacementStrategy, EntityRule};
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::tag::Tag;
+
+    // Inject an entity rule: place a "ghost" in any Goal room.
+    let ghost_rule = EntityRule {
+        archetype: EntityArchetypeId::from("ghost"),
+        placement: EntityPlacementStrategy::Center,
+        min_count: 1,
+        max_count: 1,
+        behavior_tags: vec![Tag::from("stationary")],
+        patrol: false,
+        role_match: Some(NodeRole::Goal),
+        archetype_match: None,
+        tag_match: None,
+    };
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        additional_entity_rules: vec![ghost_rule],
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_crypt_situation();
+    let result = pipeline
+        .run(&situation)
+        .expect("crypt with additional entity rule should succeed");
+
+    // The injected rule should place a ghost in the Goal room.
+    let has_ghost = result
+        .entities
+        .entities
+        .iter()
+        .any(|e| e.archetype.0 == "ghost");
+    assert!(
+        has_ghost,
+        "injected additional_entity_rules should produce a ghost in the Goal room"
+    );
+}
+
 mod stress_tests {
     use super::*;
     use procgen::geometry::planner::SimpleGeometryPlanner;
@@ -1010,6 +1689,7 @@ fn run_crypt_entities() -> (
             &features,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
             &mut rng,
         )
         .unwrap();
@@ -1035,6 +1715,7 @@ fn run_tavern_entities() -> (
             &features,
             &rules,
             &std::collections::HashMap::new(),
+            &[],
             &mut rng,
         )
         .unwrap();
@@ -1377,6 +2058,167 @@ fn pipeline_with_empty_entity_rules_produces_no_entities() {
 // ============================================================
 // Phase 1.6: Proptest — random rules still produce valid output
 // ============================================================
+
+#[test]
+fn cellar_pinned_entity_skrag_in_goal_room() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_cellar_situation();
+    let result = pipeline.run(&situation).expect("cellar should succeed");
+
+    // Find the Goal room's space_id from annotations.
+    let goal_ann = result
+        .annotations
+        .iter()
+        .find(|a| a.is_goal)
+        .expect("should have a goal annotation");
+    let goal_space_id = goal_ann.space_id;
+
+    // Find Skrag the Rat King in the entity plan.
+    let skrag = result
+        .entities
+        .entities
+        .iter()
+        .find(|e| e.name.as_deref() == Some("Skrag the Rat King"))
+        .expect("Skrag the Rat King should be placed");
+
+    // Verify Skrag is in the Goal room.
+    assert_eq!(
+        skrag.space_id, goal_space_id,
+        "Skrag should be in the Goal room (space_id {:?}), but was in {:?}",
+        goal_space_id, skrag.space_id
+    );
+    assert_eq!(
+        skrag.archetype.0, "giant_rat",
+        "Skrag should be a giant_rat archetype"
+    );
+}
+
+#[test]
+fn cellar_pinned_entity_appears_in_annotations() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let situation = build_cellar_situation();
+    let result = pipeline.run(&situation).expect("cellar should succeed");
+
+    // Goal annotation should list Skrag as a named entity.
+    let goal_ann = result
+        .annotations
+        .iter()
+        .find(|a| a.is_goal)
+        .expect("should have a goal annotation");
+
+    assert!(
+        !goal_ann.named_entities.is_empty(),
+        "goal room annotation should have named entities"
+    );
+
+    let skrag_ann = goal_ann
+        .named_entities
+        .iter()
+        .find(|ne| ne.name == "Skrag the Rat King");
+    assert!(
+        skrag_ann.is_some(),
+        "goal annotation should include Skrag the Rat King"
+    );
+
+    let skrag_ann = skrag_ann.unwrap();
+    assert_eq!(skrag_ann.archetype.0, "giant_rat");
+}
+
+#[test]
+fn pinned_entity_deterministic_across_seeds() {
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+
+    // Test with multiple seeds — Skrag should always appear in Goal room.
+    for seed in [1, 7, 13, 42, 99, 256] {
+        let config = PipelineConfig {
+            seed: Some(seed),
+            ..PipelineConfig::default()
+        };
+        let pipeline = Pipeline { config };
+        let situation = build_cellar_situation();
+        let result = pipeline.run(&situation).expect("cellar should succeed");
+
+        let goal_ann = result
+            .annotations
+            .iter()
+            .find(|a| a.is_goal)
+            .expect("should have a goal annotation");
+
+        let skrag = result
+            .entities
+            .entities
+            .iter()
+            .find(|e| e.name.as_deref() == Some("Skrag the Rat King"));
+        assert!(skrag.is_some(), "Skrag should be placed with seed {}", seed);
+        assert_eq!(
+            skrag.unwrap().space_id,
+            goal_ann.space_id,
+            "Skrag should be in Goal room with seed {}",
+            seed
+        );
+    }
+}
+
+#[test]
+fn pinned_entity_custom_directive_targets_entry() {
+    use procgen::entity::plan::EntityArchetypeId;
+    use procgen::intent::graph::NodeRole;
+    use procgen::pipeline::{Pipeline, PipelineConfig};
+    use procgen::situation::{SituationContext, SituationDirective};
+    use procgen::tag::Tag;
+
+    // Create a custom situation with a pinned entity in the Entry room.
+    let situation = SituationContext::new(vec![
+        Tag::from("undead"),
+        Tag::from("crypt"),
+        Tag::from("noble"),
+    ])
+    .with_binding("location", "noble_crypt")
+    .with_binding("theme", "undead_nobility")
+    .with_directive(SituationDirective::PinEntity {
+        archetype: EntityArchetypeId::from("skeleton"),
+        name: "Old Bones".to_string(),
+        target_role: NodeRole::Entry,
+    });
+
+    let config = PipelineConfig {
+        seed: Some(42),
+        ..PipelineConfig::default()
+    };
+    let pipeline = Pipeline { config };
+    let result = pipeline.run(&situation).expect("crypt should succeed");
+
+    // Find Old Bones — should be in Entry room.
+    let old_bones = result
+        .entities
+        .entities
+        .iter()
+        .find(|e| e.name.as_deref() == Some("Old Bones"))
+        .expect("Old Bones should be placed");
+
+    let entry_ann = result
+        .annotations
+        .iter()
+        .find(|a| a.is_entry)
+        .expect("should have entry annotation");
+
+    assert_eq!(
+        old_bones.space_id, entry_ann.space_id,
+        "Old Bones should be in the Entry room"
+    );
+}
 
 mod random_rules_tests {
     use super::*;
