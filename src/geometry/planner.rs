@@ -2,10 +2,15 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use tracing::{debug, info, info_span, warn};
 
+use crate::geometry::common::{
+    apply_shape_refinement, build_adjacency, find_bfs_root, get_space_dimensions,
+    normalize_positions,
+};
 use crate::geometry::geom::*;
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
-use crate::intent::graph::NodeRole;
-use crate::spatial::plan::{SpaceId, SpaceKind, SpatialConstraint, SpatialPlan};
+#[cfg(test)]
+use crate::intent::map_intent::LocationKind;
+use crate::spatial::plan::{SpaceId, SpatialConstraint, SpatialPlan};
 use crate::validate::Validator;
 use crate::validate::geometry::GeometryValidator;
 
@@ -33,7 +38,11 @@ impl std::fmt::Display for GeometryPlanError {
 impl std::error::Error for GeometryPlanError {}
 
 pub trait GeometryPlanner {
-    fn plan(&self, spatial: &SpatialPlan) -> Result<GeometryPlan, GeometryPlanError>;
+    fn plan(
+        &self,
+        spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<GeometryPlan, GeometryPlanError>;
 }
 
 /// Configuration for constraint-aware placement.
@@ -55,12 +64,16 @@ impl Default for PlacementConfig {
 }
 
 #[derive(Default)]
-pub struct SimpleGeometryPlanner {
+pub struct ColumnGeometryPlanner {
     pub config: PlacementConfig,
 }
 
-impl GeometryPlanner for SimpleGeometryPlanner {
-    fn plan(&self, spatial: &SpatialPlan) -> Result<GeometryPlan, GeometryPlanError> {
+impl GeometryPlanner for ColumnGeometryPlanner {
+    fn plan(
+        &self,
+        spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
+    ) -> Result<GeometryPlan, GeometryPlanError> {
         if spatial.spaces.is_empty() {
             return Err(GeometryPlanError::EmptyPlan);
         }
@@ -76,7 +89,7 @@ impl GeometryPlanner for SimpleGeometryPlanner {
         let adjacency = build_adjacency(spatial);
 
         // Choose the BFS root: prefer a PreferCentral space (hub), otherwise entry.
-        let root_id = choose_bfs_root(spatial);
+        let root_id = find_bfs_root(spatial);
         info!(root = root_id.0, "selected BFS root");
 
         // BFS from the root to assign (depth, sibling_index) to each space.
@@ -117,6 +130,10 @@ impl GeometryPlanner for SimpleGeometryPlanner {
             );
         }
 
+        // ── Shape refinement: transform rects into organic footprints ──
+        let location_kind = spatial.location_kind;
+        apply_shape_refinement(&mut placed, spatial, location_kind, rng);
+
         // Route links between placed spaces.
         let links = ZShapeRouter.route(spatial, &placed);
         info!(corridors = links.len(), "routing complete");
@@ -128,12 +145,13 @@ impl GeometryPlanner for SimpleGeometryPlanner {
     }
 }
 
-impl SimpleGeometryPlanner {
+impl ColumnGeometryPlanner {
     /// Runs `plan()` followed by `GeometryValidator`. On validation errors,
     /// retries up to `MAX_RETRIES` times with relaxed spacing (+2 each retry).
     pub fn plan_with_validation(
         &self,
         spatial: &SpatialPlan,
+        rng: &mut dyn rand::RngCore,
     ) -> Result<GeometryPlan, GeometryPlanError> {
         let _span = info_span!("plan_with_validation").entered();
         const MAX_RETRIES: u32 = 3;
@@ -141,7 +159,7 @@ impl SimpleGeometryPlanner {
         let mut last_errors = Vec::new();
 
         for attempt in 0..=MAX_RETRIES {
-            let planner = SimpleGeometryPlanner {
+            let planner = ColumnGeometryPlanner {
                 config: PlacementConfig {
                     min_gap: self.config.min_gap + (attempt as i32) * 2,
                     separation_gap: self.config.separation_gap + (attempt as i32) * 2,
@@ -154,7 +172,7 @@ impl SimpleGeometryPlanner {
                 separation_gap = planner.config.separation_gap,
                 "planning attempt"
             );
-            let plan = planner.plan(spatial)?;
+            let plan = planner.plan(spatial, rng)?;
             let result = GeometryValidator::default().validate(&plan);
 
             // Log all validation issues.
@@ -190,41 +208,6 @@ impl SimpleGeometryPlanner {
 }
 
 // --- Internal helpers ---
-
-/// Choose the BFS root based on spatial constraints.
-/// Prefers a `PreferCentral` space (hub) as the root so it ends up at depth 0 (center).
-/// Falls back to the entry space, then the first space.
-fn choose_bfs_root(spatial: &SpatialPlan) -> SpaceId {
-    // Check for PreferCentral constraint — use that space as root.
-    for constraint in &spatial.constraints {
-        if let SpatialConstraint::PreferCentral { space } = constraint {
-            // Verify it exists in the plan.
-            if spatial.spaces.iter().any(|s| s.id == *space) {
-                return *space;
-            }
-        }
-    }
-
-    // Fall back to the entry space.
-    spatial
-        .spaces
-        .iter()
-        .find(|s| s.role == NodeRole::Entry)
-        .or_else(|| spatial.spaces.first())
-        .map(|s| s.id)
-        .unwrap_or(SpaceId(0))
-}
-
-/// Adjacency list from the spatial plan's links.
-fn build_adjacency(spatial: &SpatialPlan) -> HashMap<SpaceId, Vec<SpaceId>> {
-    let mut adj: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
-    for link in &spatial.links {
-        adj.entry(link.from).or_default().push(link.to);
-        // Also store reverse for undirected BFS traversal
-        adj.entry(link.to).or_default().push(link.from);
-    }
-    adj
-}
 
 /// BFS position assignment: each space gets a (depth, sibling_index).
 struct BfsPosition {
@@ -566,46 +549,6 @@ fn compute_bounding_box(placed: &[PlacedSpace]) -> Rect {
     }
 }
 
-/// Normalize all placed spaces so that the minimum x and y coordinates are at
-/// least `MARGIN` tiles from the origin. This ensures corridors and walls have
-/// room to render even after constraint adjustments push spaces around.
-fn normalize_positions(placed: &mut [PlacedSpace]) {
-    const MARGIN: i32 = 2;
-
-    if placed.is_empty() {
-        return;
-    }
-
-    let min_x = placed.iter().map(|s| s.rect.x).min().unwrap_or(0);
-    let min_y = placed.iter().map(|s| s.rect.y).min().unwrap_or(0);
-
-    let shift_x = MARGIN - min_x;
-    let shift_y = MARGIN - min_y;
-
-    if shift_x == 0 && shift_y == 0 {
-        return;
-    }
-
-    debug!(
-        shift_x = shift_x,
-        shift_y = shift_y,
-        "normalizing positions"
-    );
-
-    for space in placed.iter_mut() {
-        space.rect.x += shift_x;
-        space.rect.y += shift_y;
-        space.footprint = Footprint::Rect(space.rect);
-    }
-}
-
-/// Extract width/height from a space's kind.
-fn get_space_dimensions(space: &crate::spatial::plan::SpaceSpec) -> (i32, i32) {
-    match &space.kind {
-        SpaceKind::Atomic(a) => (a.width, a.height),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +559,8 @@ mod tests {
     };
     use crate::validate::geometry::{GeometryValidator, GeometryValidatorConfig};
     use crate::validate::{Severity, Validator};
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     /// Helper: build a simple space spec.
     fn make_space(id: u32, role: NodeRole, w: i32, h: i32) -> SpaceSpec {
@@ -623,7 +568,9 @@ mod tests {
             id: SpaceId(id),
             origin: ScenarioNodeId(id),
             role,
-            tags: vec![],
+            structural_tags: vec![],
+            atmosphere_tags: vec![],
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: w,
@@ -668,14 +615,16 @@ mod tests {
                 SpatialConstraint::PreferCentral { space: SpaceId(1) },
                 SpatialConstraint::PreferPerimeter { space: SpaceId(0) },
             ],
+            location_kind: LocationKind::Dungeon,
         }
     }
 
     #[test]
     fn prefer_central_space_is_at_depth_zero() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         // The hub (space 1) has PreferCentral, so it should be the BFS root
         // and placed at the leftmost column (depth 0).
@@ -702,8 +651,9 @@ mod tests {
     #[test]
     fn prefer_perimeter_shifts_space_outward() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let entry = plan
             .spaces
@@ -759,15 +709,17 @@ mod tests {
                 a: SpaceId(1),
                 b: SpaceId(2),
             }],
+            location_kind: LocationKind::Dungeon,
         };
 
-        let planner = SimpleGeometryPlanner {
+        let planner = ColumnGeometryPlanner {
             config: PlacementConfig {
                 min_gap: 2,
                 separation_gap: 8,
             },
         };
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let s1 = plan
             .spaces
@@ -811,16 +763,18 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let min_gap = 3;
-        let planner = SimpleGeometryPlanner {
+        let planner = ColumnGeometryPlanner {
             config: PlacementConfig {
                 min_gap,
                 separation_gap: 6,
             },
         };
-        let plan = planner.plan(&spatial).unwrap();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         for i in 0..plan.spaces.len() {
             for j in (i + 1)..plan.spaces.len() {
@@ -840,8 +794,9 @@ mod tests {
     #[test]
     fn no_overlaps_after_constraint_adjustments() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         for i in 0..plan.spaces.len() {
             for j in (i + 1)..plan.spaces.len() {
@@ -858,8 +813,9 @@ mod tests {
     #[test]
     fn geometry_validator_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let validator = GeometryValidator::new(GeometryValidatorConfig { min_spacing: 1 });
         let result = validator.validate(&plan);
@@ -902,10 +858,12 @@ mod tests {
                 a: SpaceId(1),
                 b: SpaceId(2),
             }],
+            location_kind: LocationKind::Dungeon,
         };
 
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         let validator = GeometryValidator::new(GeometryValidatorConfig { min_spacing: 1 });
         let result = validator.validate(&plan);
@@ -928,9 +886,11 @@ mod tests {
             spaces: vec![],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
-        let planner = SimpleGeometryPlanner::default();
-        assert!(planner.plan(&spatial).is_err());
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        assert!(planner.plan(&spatial, &mut rng).is_err());
     }
 
     #[test]
@@ -939,9 +899,11 @@ mod tests {
             spaces: vec![make_space(0, NodeRole::Entry, 7, 7)],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan(&spatial).unwrap();
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan(&spatial, &mut rng).unwrap();
 
         assert_eq!(plan.spaces.len(), 1);
         assert_eq!(plan.spaces[0].rect.w, 7);
@@ -951,8 +913,9 @@ mod tests {
     #[test]
     fn plan_with_validation_passes_for_hub_plan() {
         let spatial = hub_and_entry_plan();
-        let planner = SimpleGeometryPlanner::default();
-        let plan = planner.plan_with_validation(&spatial);
+        let planner = ColumnGeometryPlanner::default();
+        let mut rng = StdRng::seed_from_u64(42);
+        let plan = planner.plan_with_validation(&spatial, &mut rng);
         assert!(
             plan.is_ok(),
             "plan_with_validation should succeed: {:?}",

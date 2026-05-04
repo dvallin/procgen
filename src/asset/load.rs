@@ -9,12 +9,14 @@
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
+use crate::atmosphere::profile::AtmosphereProfile;
 use crate::entity::rules::EntityRule;
+use crate::feature::registry::{FeatureProperties, FeatureRegistry};
 use crate::feature::rules::FeatureRule;
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::vocabulary::ThemeVocabulary;
+use crate::interior::template::InteriorTemplate;
 use crate::tile::registry::{TileProperties, TileRegistry};
-use crate::tile::scatter::TileScatterRule;
 
 // ─── Embedded defaults (compiled into the binary) ───────────────────────────
 
@@ -33,8 +35,15 @@ const EMBEDDED_THEME_VOCABULARIES: &str = include_str!("../../assets/vocabularie
 /// Default tile registry, embedded at compile time.
 const EMBEDDED_TILE_REGISTRY: &str = include_str!("../../assets/rules/tiles.json");
 
-/// Default tile scatter rules, embedded at compile time.
-const EMBEDDED_TILE_SCATTER_RULES: &str = include_str!("../../assets/rules/tile_scatter.json");
+/// Default feature type registry, embedded at compile time.
+const EMBEDDED_FEATURE_REGISTRY: &str = include_str!("../../assets/rules/feature_types.json");
+
+/// Default atmosphere profiles, embedded at compile time.
+const EMBEDDED_ATMOSPHERE_PROFILES: &str = include_str!("../../assets/rules/atmospheres.json");
+
+/// Default interior templates, embedded at compile time.
+const EMBEDDED_INTERIOR_TEMPLATES: &str =
+    include_str!("../../assets/rules/interior_templates.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -112,7 +121,7 @@ pub fn load_rules<T: DeserializeOwned>(path: impl AsRef<Path>) -> Result<Vec<T>,
 /// use procgen::asset::load::load_rules_from_str;
 /// use procgen::feature::rules::FeatureRule;
 ///
-/// let json = r#"[{"kind":"Chest","strategy":"Center","required":true,"max_count":1,"match_role":null,"match_archetype":null,"match_tag":null}]"#;
+/// let json = r#"[{"feature_type":"chest","strategy":"Center","required":true,"max_count":1,"match_role":null,"match_archetype":null,"match_tag":null}]"#;
 /// let rules: Vec<FeatureRule> = load_rules_from_str(json, "inline").unwrap();
 /// assert_eq!(rules.len(), 1);
 /// ```
@@ -215,15 +224,43 @@ pub fn load_default_tile_registry() -> Result<TileRegistry, AssetLoadError> {
     Ok(registry)
 }
 
-/// Default file path for tile scatter rules, relative to the working directory.
-pub const DEFAULT_TILE_SCATTER_RULES_PATH: &str = "assets/rules/tile_scatter.json";
+/// Default file path for the feature type registry, relative to the working directory.
+pub const DEFAULT_FEATURE_REGISTRY_PATH: &str = "assets/rules/feature_types.json";
 
-/// Load the default tile scatter rules.
+/// Load the default feature registry.
 ///
-/// Tries `assets/rules/tile_scatter.json` on disk first, falls back to
+/// Tries `assets/rules/feature_types.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist. Builds a [`FeatureRegistry`]
+/// from the loaded feature properties.
+pub fn load_default_feature_registry() -> Result<FeatureRegistry, AssetLoadError> {
+    let props: Vec<FeatureProperties> =
+        load_rules_with_fallback(DEFAULT_FEATURE_REGISTRY_PATH, EMBEDDED_FEATURE_REGISTRY)?;
+    Ok(FeatureRegistry::from_properties(props))
+}
+
+/// Default file path for atmosphere profiles, relative to the working directory.
+pub const DEFAULT_ATMOSPHERE_PROFILES_PATH: &str = "assets/rules/atmospheres.json";
+
+/// Load the default atmosphere profiles.
+///
+/// Tries `assets/rules/atmospheres.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist.
+pub fn load_default_atmosphere_profiles() -> Result<Vec<AtmosphereProfile>, AssetLoadError> {
+    load_rules_with_fallback(
+        DEFAULT_ATMOSPHERE_PROFILES_PATH,
+        EMBEDDED_ATMOSPHERE_PROFILES,
+    )
+}
+
+/// Default file path for interior templates, relative to the working directory.
+pub const DEFAULT_INTERIOR_TEMPLATES_PATH: &str = "assets/rules/interior_templates.json";
+
+/// Load the default interior templates.
+///
+/// Tries `assets/rules/interior_templates.json` on disk first, falls back to
 /// the compiled-in version if the file doesn't exist.
-pub fn load_default_tile_scatter_rules() -> Result<Vec<TileScatterRule>, AssetLoadError> {
-    load_rules_with_fallback(DEFAULT_TILE_SCATTER_RULES_PATH, EMBEDDED_TILE_SCATTER_RULES)
+pub fn load_default_interior_templates() -> Result<Vec<InteriorTemplate>, AssetLoadError> {
+    load_rules_with_fallback(DEFAULT_INTERIOR_TEMPLATES_PATH, EMBEDDED_INTERIOR_TEMPLATES)
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -232,7 +269,7 @@ pub fn load_default_tile_scatter_rules() -> Result<Vec<TileScatterRule>, AssetLo
 mod tests {
     use super::*;
     use crate::entity::plan::EntityArchetypeId;
-    use crate::feature::plan::FeatureKind;
+    use crate::feature::registry::FeatureType;
     use crate::intent::graph::NodeRole;
     use crate::spatial::plan::SpaceArchetype;
     use crate::tag::Tag;
@@ -240,10 +277,12 @@ mod tests {
     #[test]
     fn load_embedded_feature_rules_succeeds() {
         let rules = load_default_feature_rules().unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
 
         // Spot-check a known rule.
-        let sarcophagus = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
+        let sarcophagus = rules
+            .iter()
+            .find(|r| r.feature_type == FeatureType::from("sarcophagus"));
         assert!(sarcophagus.is_some());
         let rule = sarcophagus.unwrap();
         assert!(rule.required);
@@ -254,7 +293,7 @@ mod tests {
     #[test]
     fn load_embedded_entity_rules_succeeds() {
         let rules = load_default_entity_rules().unwrap();
-        assert_eq!(rules.len(), 7);
+        assert_eq!(rules.len(), 4);
 
         // Spot-check a known rule.
         let guardian = rules
@@ -270,7 +309,7 @@ mod tests {
     fn load_rules_from_str_parses_minimal_json() {
         let json = r#"[
             {
-                "kind": "Table",
+                "feature_type": "table",
                 "strategy": "Center",
                 "required": false,
                 "max_count": 1,
@@ -281,7 +320,7 @@ mod tests {
         ]"#;
         let rules: Vec<FeatureRule> = load_rules_from_str(json, "test").unwrap();
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].kind, FeatureKind::Table);
+        assert_eq!(rules[0].feature_type, FeatureType::from("table"));
     }
 
     #[test]
@@ -309,7 +348,7 @@ mod tests {
         // load_rules_with_fallback should use it rather than the fallback.
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("assets/rules/features.json", "[]").unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
     }
 
     #[test]
@@ -317,7 +356,7 @@ mod tests {
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("nonexistent/path/features.json", EMBEDDED_FEATURE_RULES)
                 .unwrap();
-        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.len(), 5);
     }
 
     #[test]
@@ -431,12 +470,13 @@ mod tests {
     #[test]
     fn load_embedded_vocabularies_succeeds() {
         let vocabs = load_default_vocabularies().unwrap();
-        assert_eq!(vocabs.len(), 3);
+        assert_eq!(vocabs.len(), 4);
 
         let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"undead_nobility"));
         assert!(ids.contains(&"urban_underground"));
         assert!(ids.contains(&"natural_cave"));
+        assert!(ids.contains(&"vermin_cellar"));
     }
 
     #[test]

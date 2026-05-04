@@ -1,10 +1,12 @@
 use clap::{Parser, ValueEnum};
 
 use procgen::demo::cave::build_cave_situation;
+use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
 use procgen::demo::tavern::build_tavern_situation;
-use procgen::pipeline::{Pipeline, PipelineConfig};
-use procgen::tile::ascii::render_ascii_full;
+use procgen::feature::registry::FeatureRegistry;
+use procgen::pipeline::{GeometryStrategy, Pipeline, PipelineConfig};
+use procgen::tile::ascii::{render_ascii, render_ascii_annotated};
 use procgen::tile::registry::TileRegistry;
 use tracing_subscriber::EnvFilter;
 
@@ -23,6 +25,14 @@ struct Cli {
     /// Enable tracing output (to stderr).
     #[arg(long, default_missing_value = "info", num_args = 0..=1)]
     trace: Option<TraceLevel>,
+
+    /// Print annotated map with room letters and legend.
+    #[arg(long)]
+    annotate: bool,
+
+    /// Geometry layout strategy.
+    #[arg(long, default_value = "force")]
+    layout: Layout,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -30,6 +40,7 @@ enum Scenario {
     Crypt,
     Tavern,
     Cave,
+    Cellar,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -37,6 +48,14 @@ enum TraceLevel {
     Info,
     Debug,
     All,
+}
+
+#[derive(Clone, ValueEnum)]
+enum Layout {
+    /// BFS column layout (original, good for small maps).
+    Column,
+    /// Force-directed simulation (better for larger maps).
+    Force,
 }
 
 fn main() {
@@ -60,6 +79,10 @@ fn main() {
 
     let config = PipelineConfig {
         seed: cli.seed,
+        geometry_strategy: match cli.layout {
+            Layout::Column => GeometryStrategy::Column,
+            Layout::Force => GeometryStrategy::ForceDirected,
+        },
         ..PipelineConfig::default()
     };
     let pipeline = Pipeline { config };
@@ -80,15 +103,41 @@ fn main() {
             println!("=== Natural Cave ===\n");
             pipeline.run(&situation)
         }
+        Scenario::Cellar => {
+            let situation = build_cellar_situation();
+            println!("=== Rat-Infested Port Cellar ===\n");
+            pipeline.run(&situation)
+        }
     };
 
     match result {
         Ok(r) => {
-            let registry = TileRegistry::default_registry();
-            println!(
-                "{}",
-                render_ascii_full(&r.tiles, &r.features, &r.entities, &registry)
-            );
+            let tile_registry = TileRegistry::default_registry();
+            let feature_registry = FeatureRegistry::default_registry();
+            if cli.annotate {
+                println!(
+                    "{}",
+                    render_ascii_annotated(
+                        &r.tiles,
+                        &r.features,
+                        &r.entities,
+                        &tile_registry,
+                        &feature_registry,
+                        &r.annotations,
+                    )
+                );
+            } else {
+                println!(
+                    "{}",
+                    render_ascii(
+                        &r.tiles,
+                        &r.features,
+                        &r.entities,
+                        &tile_registry,
+                        &feature_registry,
+                    )
+                );
+            }
         }
         Err(e) => {
             eprintln!("Pipeline error: {e}");

@@ -1,106 +1,87 @@
 use std::collections::HashMap;
 
 use crate::entity::plan::{EntityArchetypeId, EntityPlan};
-use crate::feature::plan::{FeatureKind, FeaturePlan};
+use crate::feature::plan::FeaturePlan;
+use crate::feature::registry::{FeatureRegistry, FeatureType};
 use crate::geometry::geom::Point;
 use crate::tile::map::TileMap;
-use crate::tile::registry::{Tile, TileId, TileRegistry};
+use crate::tile::registry::{TileId, TileRegistry};
 
-/// Renders a `TileMap` with an overlay map applied on top.
-/// Overlay characters take priority over the underlying tile.
-/// When a registry is provided, it is used to look up tile characters;
-/// otherwise the built-in `tile_char` fallback is used.
-fn render_with_overlay(
+/// Core rendering: builds an ASCII string from a tile map, feature overlay, and entity overlay.
+/// Tile characters come from `tile_registry`; feature characters from `feature_registry`.
+/// Priority: entity > feature > tile.
+fn render_impl(
     map: &TileMap,
-    overlay: &HashMap<Point, char>,
-    registry: Option<&TileRegistry>,
+    features: &FeaturePlan,
+    entities: &EntityPlan,
+    tile_registry: &TileRegistry,
+    feature_registry: &FeatureRegistry,
 ) -> String {
-    let mut out = String::new();
+    // Build overlay: features first, then entities (entities win ties).
+    let mut overlay: HashMap<Point, char> = HashMap::new();
+    for placement in &features.features {
+        let ch = feature_registry.ascii_char(&placement.feature_type);
+        for &cell in &placement.cells {
+            overlay.insert(cell, ch);
+        }
+    }
+    for entity in &entities.entities {
+        let ch = entity_char(&entity.archetype);
+        overlay.insert(entity.position, ch);
+    }
 
+    // Render
+    let mut out = String::new();
     for y in 0..map.height as i32 {
         for x in 0..map.width as i32 {
             let pt = Point { x, y };
             let ch = if let Some(&oc) = overlay.get(&pt) {
                 oc
             } else {
-                match registry {
-                    Some(reg) => reg.ascii_char(map.get(x, y).unwrap_or(Tile::VOID)),
-                    None => tile_char(map.get(x, y).unwrap_or(Tile::VOID)),
-                }
+                tile_registry.ascii_char(map.get(x, y).unwrap_or(TileId(0)))
             };
             out.push(ch);
         }
         out.push('\n');
     }
-
     out
 }
 
-/// Returns the ASCII character for a tile.
-fn tile_char(tile: TileId) -> char {
-    if tile == Tile::VOID {
-        ' '
-    } else if tile == Tile::FLOOR {
-        '.'
-    } else if tile == Tile::WALL {
-        '#'
-    } else if tile == Tile::DOOR {
-        '+'
-    } else if tile == Tile::LOCKED_DOOR {
-        '*'
-    } else {
-        '?'
-    }
-}
-
-/// Builds a point→char overlay from a feature plan.
-fn build_feature_overlay(features: &FeaturePlan) -> HashMap<Point, char> {
-    let mut overlay = HashMap::new();
-    for placement in &features.features {
-        let ch = feature_char(&placement.kind);
-        for &cell in &placement.cells {
-            overlay.insert(cell, ch);
-        }
-    }
-    overlay
-}
-
-/// Renders a `TileMap` as an ASCII string (one char per tile, newline per row).
-pub fn render_ascii(map: &TileMap) -> String {
-    render_with_overlay(map, &HashMap::new(), None)
-}
-
-/// Renders a `TileMap` as an ASCII string using the registry for tile characters.
-pub fn render_ascii_with_registry(map: &TileMap, registry: &TileRegistry) -> String {
-    render_with_overlay(map, &HashMap::new(), Some(registry))
-}
-
-/// Returns the ASCII character used to represent a given `FeatureKind`.
-pub fn feature_char(kind: &FeatureKind) -> char {
-    match kind {
-        FeatureKind::Altar => '†',
-        FeatureKind::Sarcophagus => 'S',
-        FeatureKind::Chest => '$',
-        FeatureKind::Barrel => 'o',
-        FeatureKind::Shelf => '=',
-        FeatureKind::Table => 'T',
-        FeatureKind::Trap => '^',
-        FeatureKind::Decoration(name) => match name.as_str() {
-            "moss" | "vines" | "fungus" => ',',
-            "stalagmite" | "stalactite" | "crystal" => '\u{00a4}',
-            "torch" | "lantern" => '!',
-            "banner" | "tapestry" => '|',
-            _ => '*',
-        },
-    }
-}
-
-/// Renders a `TileMap` with a `FeaturePlan` overlay as an ASCII string.
+/// Renders a `TileMap` with feature and entity overlays using the provided registries.
 ///
-/// Feature cells take priority over the underlying tile character. If multiple
-/// features occupy the same cell, the last one in the plan wins.
-pub fn render_ascii_with_features(map: &TileMap, features: &FeaturePlan) -> String {
-    render_with_overlay(map, &build_feature_overlay(features), None)
+/// Priority: entity > feature > tile base. If multiple entities/features
+/// occupy the same cell, the last one in the plan wins.
+pub fn render_ascii(
+    map: &TileMap,
+    features: &FeaturePlan,
+    entities: &EntityPlan,
+    tile_registry: &TileRegistry,
+    feature_registry: &FeatureRegistry,
+) -> String {
+    render_impl(map, features, entities, tile_registry, feature_registry)
+}
+
+/// Renders a `TileMap` with feature and entity overlays using the default registries.
+///
+/// Convenience wrapper around [`render_ascii`] that uses
+/// [`TileRegistry::default_registry`] and [`FeatureRegistry::default_registry`].
+pub fn render_ascii_default(
+    map: &TileMap,
+    features: &FeaturePlan,
+    entities: &EntityPlan,
+) -> String {
+    let tile_registry = TileRegistry::default_registry();
+    let feature_registry = FeatureRegistry::default_registry();
+    render_impl(map, features, entities, &tile_registry, &feature_registry)
+}
+
+/// Returns the ASCII character used to represent a given [`FeatureType`].
+///
+/// Uses the default feature registry for lookup. For custom registries,
+/// use [`FeatureRegistry::ascii_char`] directly.
+pub fn feature_char(feature_type: &FeatureType) -> char {
+    let registry = FeatureRegistry::default_registry();
+    registry.ascii_char(feature_type)
 }
 
 /// Returns the ASCII character used to represent an entity archetype.
@@ -123,43 +104,89 @@ pub fn entity_char(archetype: &EntityArchetypeId) -> char {
     }
 }
 
-/// Renders a `TileMap` with both a `FeaturePlan` and `EntityPlan` overlay.
+/// Renders a `TileMap` with feature/entity overlays AND room letter annotations.
 ///
-/// Priority: entity > feature > tile base. If multiple entities/features
-/// occupy the same cell, the last one in the plan wins.
-pub fn render_ascii_with_entities(
+/// Each room's assigned letter is overlaid at its center point on the map.
+/// Below the map, a legend is printed listing each room's letter, label, and role.
+///
+/// Format:
+/// ```text
+/// [A] Crypt Entrance (Entry) *
+/// [B] Ossuary (Hub)
+/// [C] Family Vault (Goal) !
+/// ```
+///
+/// `*` marks the entry room, `!` marks the primary goal.
+pub fn render_ascii_annotated(
     map: &TileMap,
-    features: &FeaturePlan,
-    entities: &EntityPlan,
+    features: &crate::feature::plan::FeaturePlan,
+    entities: &crate::entity::plan::EntityPlan,
+    tile_registry: &TileRegistry,
+    feature_registry: &FeatureRegistry,
+    annotations: &[crate::pipeline::RoomAnnotation],
 ) -> String {
-    let mut overlay = build_feature_overlay(features);
-    // Entity overlay takes priority over features.
-    for entity in &entities.entities {
-        let ch = entity_char(&entity.archetype);
-        overlay.insert(entity.position, ch);
-    }
-    render_with_overlay(map, &overlay, None)
-}
+    use std::collections::HashMap as OverlayMap;
 
-/// Renders a `TileMap` with feature and entity overlays using the tile registry.
-pub fn render_ascii_full(
-    map: &TileMap,
-    features: &FeaturePlan,
-    entities: &EntityPlan,
-    registry: &TileRegistry,
-) -> String {
-    let mut overlay = build_feature_overlay(features);
+    // Build overlay: features first, then entities (entities win ties).
+    let mut overlay: OverlayMap<Point, char> = OverlayMap::new();
+    for placement in &features.features {
+        let ch = feature_registry.ascii_char(&placement.feature_type);
+        for &cell in &placement.cells {
+            overlay.insert(cell, ch);
+        }
+    }
     for entity in &entities.entities {
         let ch = entity_char(&entity.archetype);
         overlay.insert(entity.position, ch);
     }
-    render_with_overlay(map, &overlay, Some(registry))
+
+    // Room letter overlays take highest priority.
+    for ann in annotations {
+        overlay.insert(ann.center, ann.letter);
+    }
+
+    // Render map
+    let mut out = String::new();
+    for y in 0..map.height as i32 {
+        for x in 0..map.width as i32 {
+            let pt = Point { x, y };
+            let ch = if let Some(&oc) = overlay.get(&pt) {
+                oc
+            } else {
+                tile_registry.ascii_char(map.get(x, y).unwrap_or(TileId(0)))
+            };
+            out.push(ch);
+        }
+        out.push('\n');
+    }
+
+    // Legend
+    out.push('\n');
+    for ann in annotations {
+        let label = ann.label.as_deref().unwrap_or("<unnamed>");
+        let role = format!("{:?}", ann.role);
+        let flags = match (ann.is_entry, ann.is_goal) {
+            (true, _) => " *",
+            (_, true) => " !",
+            _ => "",
+        };
+        out.push_str(&format!("[{}] {} ({}){}", ann.letter, label, role, flags));
+        out.push('\n');
+
+        // List named entities in this room.
+        for ne in &ann.named_entities {
+            out.push_str(&format!("    >> {} ({})", ne.name, ne.archetype.0));
+            out.push('\n');
+        }
+    }
+
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feature::plan::{FeatureKind, FeaturePlacement, FeaturePlan};
+    use crate::feature::plan::FeaturePlacement;
     use crate::geometry::geom::Point;
     use crate::spatial::plan::SpaceId;
     use crate::tile::map::TileMap;
@@ -190,14 +217,14 @@ mod tests {
         FeaturePlan {
             features: vec![
                 FeaturePlacement {
-                    kind: FeatureKind::Altar,
+                    feature_type: FeatureType::from("altar"),
                     anchor: Point { x: 2, y: 2 },
                     cells: vec![Point { x: 2, y: 2 }],
                     space_id: SpaceId(0),
                     tags: vec![],
                 },
                 FeaturePlacement {
-                    kind: FeatureKind::Chest,
+                    feature_type: FeatureType::from("chest"),
                     anchor: Point { x: 1, y: 3 },
                     cells: vec![Point { x: 1, y: 3 }],
                     space_id: SpaceId(0),
@@ -208,9 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn render_ascii_base_map() {
+    fn render_base_map() {
         let map = make_5x5_room();
-        let output = render_ascii(&map);
+        let output = render_ascii_default(&map, &FeaturePlan::empty(), &EntityPlan::empty());
         let expected = "\
 ##+##\n\
 #...#\n\
@@ -221,15 +248,10 @@ mod tests {
     }
 
     #[test]
-    fn render_ascii_with_features_overlays_correctly() {
+    fn render_with_features_overlays_correctly() {
         let map = make_5x5_room();
         let features = make_test_features();
-        let output = render_ascii_with_features(&map, &features);
-        // Row 0: ##+##
-        // Row 1: #...#
-        // Row 2: #.†.#   (altar at 2,2)
-        // Row 3: #$..#   (chest at 1,3)
-        // Row 4: #####
+        let output = render_ascii_default(&map, &features, &EntityPlan::empty());
         let expected = "\
 ##+##\n\
 #...#\n\
@@ -240,10 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn render_ascii_without_features_has_no_overlay() {
+    fn render_without_features_has_no_overlay() {
         let map = make_5x5_room();
-        let base = render_ascii(&map);
-        let with_empty = render_ascii_with_features(&map, &FeaturePlan::empty());
+        let base = render_ascii_default(&map, &FeaturePlan::empty(), &EntityPlan::empty());
+        let with_empty = render_ascii_default(&map, &FeaturePlan::empty(), &EntityPlan::empty());
         assert_eq!(
             base, with_empty,
             "empty FeaturePlan should match base render"
@@ -252,35 +274,26 @@ mod tests {
 
     #[test]
     fn feature_char_mapping_is_complete() {
-        assert_eq!(feature_char(&FeatureKind::Altar), '†');
-        assert_eq!(feature_char(&FeatureKind::Sarcophagus), 'S');
-        assert_eq!(feature_char(&FeatureKind::Chest), '$');
-        assert_eq!(feature_char(&FeatureKind::Barrel), 'o');
-        assert_eq!(feature_char(&FeatureKind::Shelf), '=');
-        assert_eq!(feature_char(&FeatureKind::Table), 'T');
-        assert_eq!(feature_char(&FeatureKind::Trap), '^');
-        assert_eq!(feature_char(&FeatureKind::Decoration("torch".into())), '!');
+        assert_eq!(feature_char(&FeatureType::from("altar")), '†');
+        assert_eq!(feature_char(&FeatureType::from("sarcophagus")), 'S');
+        assert_eq!(feature_char(&FeatureType::from("chest")), '$');
+        assert_eq!(feature_char(&FeatureType::from("barrel")), 'o');
+        assert_eq!(feature_char(&FeatureType::from("shelf")), '=');
+        assert_eq!(feature_char(&FeatureType::from("table")), 'T');
+        assert_eq!(feature_char(&FeatureType::from("trap")), '^');
+        assert_eq!(feature_char(&FeatureType::from("torch")), '!');
     }
 
     #[test]
     fn cosmetic_decoration_chars() {
-        assert_eq!(feature_char(&FeatureKind::Decoration("moss".into())), ',');
-        assert_eq!(feature_char(&FeatureKind::Decoration("vines".into())), ',');
-        assert_eq!(feature_char(&FeatureKind::Decoration("fungus".into())), ',');
-        assert_eq!(
-            feature_char(&FeatureKind::Decoration("stalagmite".into())),
-            '\u{00a4}'
-        );
-        assert_eq!(
-            feature_char(&FeatureKind::Decoration("stalactite".into())),
-            '\u{00a4}'
-        );
-        assert_eq!(
-            feature_char(&FeatureKind::Decoration("crystal".into())),
-            '\u{00a4}'
-        );
-        assert_eq!(feature_char(&FeatureKind::Decoration("torch".into())), '!');
-        assert_eq!(feature_char(&FeatureKind::Decoration("banner".into())), '|');
+        assert_eq!(feature_char(&FeatureType::from("moss")), ',');
+        assert_eq!(feature_char(&FeatureType::from("vines")), ',');
+        assert_eq!(feature_char(&FeatureType::from("fungus")), ',');
+        assert_eq!(feature_char(&FeatureType::from("stalagmite")), '\u{00a4}');
+        assert_eq!(feature_char(&FeatureType::from("stalactite")), '\u{00a4}');
+        assert_eq!(feature_char(&FeatureType::from("crystal")), '\u{00a4}');
+        assert_eq!(feature_char(&FeatureType::from("torch")), '!');
+        assert_eq!(feature_char(&FeatureType::from("banner")), '|');
     }
 
     #[test]
@@ -288,14 +301,14 @@ mod tests {
         let map = make_5x5_room();
         let features = FeaturePlan {
             features: vec![FeaturePlacement {
-                kind: FeatureKind::Table,
+                feature_type: FeatureType::from("table"),
                 anchor: Point { x: 1, y: 1 },
                 cells: vec![Point { x: 1, y: 1 }, Point { x: 2, y: 1 }],
                 space_id: SpaceId(0),
                 tags: vec![],
             }],
         };
-        let output = render_ascii_with_features(&map, &features);
+        let output = render_ascii_default(&map, &features, &EntityPlan::empty());
         let expected = "\
 ##+##\n\
 #TT.#\n\
@@ -321,13 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn render_ascii_with_entities_shows_entities() {
+    fn render_with_entities_shows_entities() {
         let map = make_5x5_room();
         let features = FeaturePlan::empty();
         let entities = EntityPlan {
             entities: vec![
                 crate::entity::plan::EntityPlacement {
                     archetype: EntityArchetypeId::from("skeleton"),
+                    name: None,
                     position: Point { x: 2, y: 2 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![],
@@ -335,6 +349,7 @@ mod tests {
                 },
                 crate::entity::plan::EntityPlacement {
                     archetype: EntityArchetypeId::from("rat"),
+                    name: None,
                     position: Point { x: 3, y: 3 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![],
@@ -342,7 +357,7 @@ mod tests {
                 },
             ],
         };
-        let output = render_ascii_with_entities(&map, &features, &entities);
+        let output = render_ascii_default(&map, &features, &entities);
         let expected = "\
 ##+##\n\
 #...#\n\
@@ -359,13 +374,14 @@ mod tests {
         let entities = EntityPlan {
             entities: vec![crate::entity::plan::EntityPlacement {
                 archetype: EntityArchetypeId::from("skeleton_guardian"),
+                name: None,
                 position: Point { x: 2, y: 2 }, // same cell as the altar
                 space_id: SpaceId(0),
                 behavior_tags: vec![],
                 patrol_zone: None,
             }],
         };
-        let output = render_ascii_with_entities(&map, &features, &entities);
+        let output = render_ascii_default(&map, &features, &entities);
         // Entity 'G' should override the altar '†' at (2,2).
         // Chest '$' at (1,3) remains.
         let expected = "\
@@ -382,8 +398,8 @@ mod tests {
         let map = make_5x5_room();
         let features = make_test_features();
         let entities = EntityPlan::empty();
-        let with_entities = render_ascii_with_entities(&map, &features, &entities);
-        let features_only = render_ascii_with_features(&map, &features);
+        let with_entities = render_ascii_default(&map, &features, &entities);
+        let features_only = render_ascii_default(&map, &features, &EntityPlan::empty());
         assert_eq!(
             with_entities, features_only,
             "empty EntityPlan should produce same output as features-only render"

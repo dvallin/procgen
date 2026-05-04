@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::entity::plan::EntityArchetypeId;
-use crate::feature::plan::FeatureKind;
+use crate::feature::registry::FeatureType;
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceArchetype, SpaceSpec};
 use crate::tag::Tag;
@@ -20,8 +20,8 @@ pub enum EntityPlacementStrategy {
     RandomFloor,
     /// Place near the room's door(s) — prefer tiles adjacent to doors.
     NearEntrance,
-    /// Place near a specific feature kind (e.g. mimic near a chest).
-    NearFeature(FeatureKind),
+    /// Place near a specific feature type (e.g. mimic near a chest).
+    NearFeature(FeatureType),
 }
 
 /// A single rule that says "if a room matches these criteria, spawn this entity."
@@ -64,7 +64,7 @@ impl EntityRule {
             return false;
         }
         if let Some(ref tag) = self.tag_match
-            && !spec.tags.contains(tag)
+            && !spec.has_tag(tag)
         {
             return false;
         }
@@ -95,11 +95,16 @@ mod tests {
 
     /// Helper: build a minimal SpaceSpec with the given role, archetype, and tags.
     fn make_spec(role: NodeRole, archetype: Option<SpaceArchetype>, tags: &[&str]) -> SpaceSpec {
+        use crate::spatial::plan::classify_tags;
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(0),
             origin: ScenarioNodeId(0),
             role,
-            tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -136,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn hub_gets_skeletons() {
+    fn hub_gets_no_structural_entities() {
         let spec = make_spec(
             NodeRole::Hub,
             Some(SpaceArchetype::Hall),
@@ -145,16 +150,15 @@ mod tests {
         let rules = default_entity_rules();
         let matched = matching_entity_rules(&rules, &spec);
 
-        let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
-            archetypes.contains(&&EntityArchetypeId::from("skeleton")),
-            "hub should get skeletons, got: {:?}",
-            archetypes
+            matched.is_empty(),
+            "hub rooms should have no structural entity rules (atmosphere handles ambient entities), got: {:?}",
+            matched.iter().map(|r| &r.archetype).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn tavern_hub_with_barrels_gets_skeletons_and_rats() {
+    fn hub_with_barrels_gets_no_structural_entities() {
         let spec = make_spec(
             NodeRole::Hub,
             Some(SpaceArchetype::Hall),
@@ -163,14 +167,10 @@ mod tests {
         let rules = default_entity_rules();
         let matched = matching_entity_rules(&rules, &spec);
 
-        let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
-            archetypes.contains(&&EntityArchetypeId::from("skeleton")),
-            "hub should get skeletons"
-        );
-        assert!(
-            archetypes.contains(&&EntityArchetypeId::from("rat")),
-            "hub with 'barrels' tag should also get rats"
+            matched.is_empty(),
+            "hub rooms with barrels should have no structural entity rules (atmosphere handles rats), got: {:?}",
+            matched.iter().map(|r| &r.archetype).collect::<Vec<_>>()
         );
     }
 
@@ -274,7 +274,7 @@ mod tests {
     fn serde_near_feature_variant_round_trips() {
         let rule = EntityRule {
             archetype: EntityArchetypeId::from("trap_mimic"),
-            placement: EntityPlacementStrategy::NearFeature(FeatureKind::Trap),
+            placement: EntityPlacementStrategy::NearFeature(FeatureType::from("trap")),
             min_count: 0,
             max_count: 1,
             behavior_tags: vec![Tag::from("stationary")],
@@ -287,7 +287,7 @@ mod tests {
         let deser: EntityRule = serde_json::from_str(&json).unwrap();
         assert_eq!(
             deser.placement,
-            EntityPlacementStrategy::NearFeature(FeatureKind::Trap)
+            EntityPlacementStrategy::NearFeature(FeatureType::from("trap"))
         );
         assert_eq!(deser.archetype_match, Some(SpaceArchetype::Chamber));
         assert_eq!(deser.tag_match, Some(Tag::from("trapped")));

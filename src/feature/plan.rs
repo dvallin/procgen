@@ -1,38 +1,15 @@
 //! Data model for placed features — the output of the feature planning stage.
 
-use serde::{Deserialize, Serialize};
-
+use crate::feature::registry::FeatureType;
 use crate::geometry::geom::Point;
 use crate::spatial::plan::SpaceId;
 use crate::tag::Tag;
 
-/// The kind of feature being placed. Kept flat for MVP —
-/// inner type enums (FurnitureType, ContainerType, etc.) deferred to Phase 8.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FeatureKind {
-    /// Religious/ritual centerpiece (chapel, shrine).
-    Altar,
-    /// Burial container (crypt, tomb).
-    Sarcophagus,
-    /// Lootable container (vault, reward room).
-    Chest,
-    /// Storage/scenery barrel.
-    Barrel,
-    /// Wall-adjacent storage (pantry, library).
-    Shelf,
-    /// Functional furniture (tavern, study).
-    Table,
-    /// Hidden hazard.
-    Trap,
-    /// Catch-all for torches, statues, banners, etc.
-    Decoration(String),
-}
-
 /// A single placed feature within a room.
 #[derive(Debug, Clone)]
 pub struct FeaturePlacement {
-    /// What kind of feature this is.
-    pub kind: FeatureKind,
+    /// What type of feature this is (data-driven identifier).
+    pub feature_type: FeatureType,
     /// The primary interaction point / origin cell.
     pub anchor: Point,
     /// All tiles occupied by this feature (for single-cell features, `cells == vec![anchor]`).
@@ -97,3 +74,22 @@ impl std::fmt::Display for FeaturePlanError {
 }
 
 impl std::error::Error for FeaturePlanError {}
+
+// ─── Backward compatibility ─────────────────────────────────────────────────
+
+/// Named constants for common feature types (backward compatibility).
+///
+/// This provides a migration path from the old `FeatureKind` enum.
+/// Use these constants wherever you previously matched on enum variants.
+pub struct Feature;
+
+#[allow(non_upper_case_globals)]
+impl Feature {
+    pub const ALTAR: &'static str = "altar";
+    pub const SARCOPHAGUS: &'static str = "sarcophagus";
+    pub const CHEST: &'static str = "chest";
+    pub const BARREL: &'static str = "barrel";
+    pub const SHELF: &'static str = "shelf";
+    pub const TABLE: &'static str = "table";
+    pub const TRAP: &'static str = "trap";
+}

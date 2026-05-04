@@ -56,8 +56,8 @@ fn check_solid_tiles(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Valid
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     message: format!(
-                        "feature {:?} at ({}, {}) in space {:?} is on a solid tile ({:?})",
-                        f.kind, cell.x, cell.y, f.space_id, tile
+                        "feature '{}' at ({}, {}) in space {:?} is on a solid tile ({:?})",
+                        f.feature_type, cell.x, cell.y, f.space_id, tile
                     ),
                 });
             }
@@ -75,8 +75,8 @@ fn check_door_blocking(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Val
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     message: format!(
-                        "feature {:?} at ({}, {}) in space {:?} is blocking a door",
-                        f.kind, cell.x, cell.y, f.space_id
+                        "feature '{}' at ({}, {}) in space {:?} is blocking a door",
+                        f.feature_type, cell.x, cell.y, f.space_id
                     ),
                 });
             }
@@ -93,8 +93,8 @@ fn check_overlap(plan: &FeaturePlan, issues: &mut Vec<ValidationIssue>) {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     message: format!(
-                        "feature {:?} (index {}) and {:?} (index {}) overlap at ({}, {})",
-                        plan.features[prev].kind, prev, f.kind, i, cell.x, cell.y
+                        "feature '{}' (index {}) and '{}' (index {}) overlap at ({}, {})",
+                        plan.features[prev].feature_type, prev, f.feature_type, i, cell.x, cell.y
                     ),
                 });
             } else {
@@ -121,8 +121,8 @@ fn check_room_bounds(
             issues.push(ValidationIssue {
                 severity: Severity::Warning,
                 message: format!(
-                    "feature {:?} references unknown space {:?}",
-                    f.kind, f.space_id
+                    "feature '{}' references unknown space {:?}",
+                    f.feature_type, f.space_id
                 ),
             });
             continue;
@@ -137,8 +137,8 @@ fn check_room_bounds(
                 issues.push(ValidationIssue {
                     severity: Severity::Warning,
                     message: format!(
-                        "feature {:?} cell ({}, {}) is outside room {:?} bounds",
-                        f.kind, cell.x, cell.y, f.space_id
+                        "feature '{}' cell ({}, {}) is outside room {:?} bounds",
+                        f.feature_type, cell.x, cell.y, f.space_id
                     ),
                 });
             }
@@ -168,13 +168,15 @@ fn check_required_features(
             if !rule.required {
                 continue;
             }
-            let has_it = room_features.iter().any(|f| f.kind == rule.kind);
+            let has_it = room_features
+                .iter()
+                .any(|f| f.feature_type == rule.feature_type);
             if !has_it {
                 issues.push(ValidationIssue {
                     severity: Severity::Warning,
                     message: format!(
-                        "space {:?} is missing required feature {:?}",
-                        placed.space_id, rule.kind
+                        "space {:?} is missing required feature '{}'",
+                        placed.space_id, rule.feature_type
                     ),
                 });
             }
@@ -182,21 +184,27 @@ fn check_required_features(
     }
 }
 
-/// Error: the map must remain fully connected when feature cells are
-/// treated as impassable. A feature that cuts a corridor in half would
-/// make parts of the dungeon unreachable.
+/// Error: all door/link tiles must remain reachable from each other when
+/// blocking feature cells are treated as impassable.
+///
+/// This is the critical connectivity invariant: the dungeon must remain
+/// traversable. Individual floor tiles becoming unreachable (e.g. behind
+/// barrels in a corner) is fine — what matters is that every door can
+/// reach every other door.
 ///
 /// Note: `Decoration` features are purely cosmetic overlays and do not
 /// block passage, so they are excluded from this check.
 fn check_connectivity(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<ValidationIssue>) {
-    use crate::feature::plan::FeatureKind;
+    use crate::feature::registry::FeatureRegistry;
     use std::collections::HashSet;
 
-    // Collect cells from non-decoration features only (decorations don't block).
+    let registry = FeatureRegistry::default_registry();
+
+    // Collect cells from blocking features only (non-blocking features don't affect passage).
     let feature_cells: HashSet<Point> = plan
         .features
         .iter()
-        .filter(|f| !matches!(f.kind, FeatureKind::Decoration(_)))
+        .filter(|f| registry.is_blocking(&f.feature_type))
         .flat_map(|f| f.cells.iter().copied())
         .collect();
 
@@ -204,41 +212,40 @@ fn check_connectivity(plan: &FeaturePlan, tiles: &TileMap, issues: &mut Vec<Vali
         return;
     }
 
-    // Find all walkable tiles that are NOT blocked by features.
-    let mut all_walkable: Vec<Point> = Vec::new();
+    // Find all door tiles — these are the link points between rooms.
+    let mut door_tiles: Vec<Point> = Vec::new();
     for y in 0..tiles.height as i32 {
         for x in 0..tiles.width as i32 {
-            let p = Point { x, y };
             if let Some(tile) = tiles.get(x, y)
-                && tile.is_walkable()
-                && !feature_cells.contains(&p)
+                && (tile == Tile::DOOR || tile == Tile::LOCKED_DOOR)
             {
-                all_walkable.push(p);
+                door_tiles.push(Point { x, y });
             }
         }
     }
 
-    if all_walkable.is_empty() {
-        return;
+    if door_tiles.len() < 2 {
+        return; // 0 or 1 doors — nothing to check.
     }
 
-    // Flood fill from the first walkable non-feature tile, treating
-    // feature cells as impassable.
-    let start = all_walkable[0];
-    let reachable_with_features = flood_fill_excluding(tiles, start, &feature_cells);
+    // Flood fill from the first door, treating feature cells as impassable.
+    let start = door_tiles[0];
+    let reachable = flood_fill_excluding(tiles, start, &feature_cells);
 
-    let unreachable_count = all_walkable
+    // Every other door must be in the reachable set.
+    let unreachable_doors: Vec<&Point> = door_tiles
         .iter()
-        .filter(|p| !reachable_with_features.contains(p))
-        .count();
+        .skip(1)
+        .filter(|p| !reachable.contains(p))
+        .collect();
 
-    if unreachable_count > 0 {
+    if !unreachable_doors.is_empty() {
         issues.push(ValidationIssue {
             severity: Severity::Error,
             message: format!(
-                "features block connectivity: {} walkable tile(s) are unreachable \
-                 when feature cells are treated as impassable",
-                unreachable_count
+                "features block door connectivity: {} door(s) are unreachable \
+                 from other doors when blocking features are treated as impassable",
+                unreachable_doors.len()
             ),
         });
     }
@@ -286,9 +293,11 @@ fn flood_fill_excluding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feature::plan::{FeatureKind, FeaturePlacement};
+    use crate::feature::plan::FeaturePlacement;
+    use crate::feature::registry::FeatureType;
     use crate::geometry::geom::{Footprint, PlacedSpace, Rect};
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::*;
     use crate::tile::registry::Tile;
 
@@ -332,12 +341,17 @@ mod tests {
     }
 
     fn make_spatial(role: NodeRole, tags: &[&str]) -> SpatialPlan {
+        let raw_tags: Vec<crate::tag::Tag> =
+            tags.iter().map(|s| crate::tag::Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpatialPlan {
             spaces: vec![SpaceSpec {
                 id: SpaceId(0),
                 origin: ScenarioNodeId(0),
                 role,
-                tags: tags.iter().map(|s| crate::tag::Tag::from(*s)).collect(),
+                structural_tags: structural,
+                atmosphere_tags: atmosphere,
+                motifs: vec![],
                 style: RealizationStyle::RoomLike,
                 kind: SpaceKind::Atomic(AtomicSpace {
                     width: 5,
@@ -349,12 +363,13 @@ mod tests {
             }],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         }
     }
 
-    fn placement(kind: FeatureKind, x: i32, y: i32) -> FeaturePlacement {
+    fn placement(feature_type: &str, x: i32, y: i32) -> FeaturePlacement {
         FeaturePlacement {
-            kind,
+            feature_type: FeatureType::from(feature_type),
             anchor: Point { x, y },
             cells: vec![Point { x, y }],
             space_id: SpaceId(0),
@@ -368,7 +383,7 @@ mod tests {
         let geometry = make_geometry();
         let spatial = make_spatial(NodeRole::Hub, &[]);
         let features = FeaturePlan {
-            features: vec![placement(FeatureKind::Table, 2, 2)],
+            features: vec![placement("table", 2, 2)],
         };
 
         let result = FeatureValidator.validate(&FeatureValidationInput {
@@ -391,7 +406,7 @@ mod tests {
         let geometry = make_geometry();
         let spatial = make_spatial(NodeRole::Hub, &[]);
         let features = FeaturePlan {
-            features: vec![placement(FeatureKind::Barrel, 0, 0)],
+            features: vec![placement("barrel", 0, 0)],
         };
 
         let result = FeatureValidator.validate(&FeatureValidationInput {
@@ -420,7 +435,7 @@ mod tests {
         let spatial = make_spatial(NodeRole::Hub, &[]);
         // Door is at (2, 0).
         let features = FeaturePlan {
-            features: vec![placement(FeatureKind::Chest, 2, 0)],
+            features: vec![placement("chest", 2, 0)],
         };
 
         let result = FeatureValidator.validate(&FeatureValidationInput {
@@ -448,10 +463,7 @@ mod tests {
         let geometry = make_geometry();
         let spatial = make_spatial(NodeRole::Hub, &[]);
         let features = FeaturePlan {
-            features: vec![
-                placement(FeatureKind::Table, 2, 2),
-                placement(FeatureKind::Barrel, 2, 2),
-            ],
+            features: vec![placement("table", 2, 2), placement("barrel", 2, 2)],
         };
 
         let result = FeatureValidator.validate(&FeatureValidationInput {
@@ -483,7 +495,7 @@ mod tests {
         let spatial = make_spatial(NodeRole::Hub, &[]);
         // Place a feature well outside the 5×5 room.
         let features = FeaturePlan {
-            features: vec![placement(FeatureKind::Barrel, 10, 10)],
+            features: vec![placement("barrel", 10, 10)],
         };
 
         let result = FeatureValidator.validate(&FeatureValidationInput {
@@ -600,7 +612,7 @@ mod tests {
         // Place a feature on the corridor tile — blocks connectivity.
         let features = FeaturePlan {
             features: vec![FeaturePlacement {
-                kind: FeatureKind::Barrel,
+                feature_type: FeatureType::from("barrel"),
                 anchor: Point { x: 5, y: 2 },
                 cells: vec![Point { x: 5, y: 2 }],
                 space_id: SpaceId(0),

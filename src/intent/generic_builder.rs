@@ -9,8 +9,8 @@ use tracing::{debug, info_span};
 
 use crate::asset::load::{load_default_patterns, load_default_vocabularies};
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
+use crate::intent::compose::{CompositionContext, fill_pattern_composed};
 use crate::intent::constraints::infer_constraints;
-use crate::intent::filler::fill_pattern;
 use crate::intent::map_intent::{MapIntent, MapScale, MotifId};
 use crate::intent::pattern::NarrativePattern;
 use crate::intent::selector::select_pattern;
@@ -31,6 +31,10 @@ pub struct GenericIntentBuilder {
     patterns: Vec<NarrativePattern>,
     /// Available theme vocabularies.
     vocabularies: Vec<ThemeVocabulary>,
+    /// Optional expansion budget override for pattern composition.
+    /// When `None`, derives from situation bindings or uses a default of 0
+    /// (no expansion, preserving backward-compatible behavior).
+    expansion_budget: Option<u32>,
 }
 
 impl GenericIntentBuilder {
@@ -39,6 +43,7 @@ impl GenericIntentBuilder {
         Self {
             patterns,
             vocabularies,
+            expansion_budget: None,
         }
     }
 
@@ -56,9 +61,36 @@ impl GenericIntentBuilder {
         Ok(Self::new(patterns, vocabularies))
     }
 
-    /// Find a vocabulary by its ID (matching the situation's "theme" binding).
-    fn find_vocabulary(&self, theme_id: &str) -> Option<&ThemeVocabulary> {
-        self.vocabularies.iter().find(|v| v.id == theme_id)
+    /// Set the expansion budget for pattern composition.
+    ///
+    /// When set, overrides any budget derived from situation bindings.
+    /// When `None`, the builder checks `bindings["expansion_budget"]` and
+    /// falls back to 0 (no expansion).
+    pub fn with_expansion_budget(mut self, budget: Option<u32>) -> Self {
+        self.expansion_budget = budget;
+        self
+    }
+
+    /// Find a vocabulary by its ID and resolve any base inheritance.
+    fn find_vocabulary(&self, theme_id: &str) -> Option<ThemeVocabulary> {
+        let vocab = self.vocabularies.iter().find(|v| v.id == theme_id)?;
+        vocab.resolve(&self.vocabularies)
+    }
+
+    /// Resolve the expansion budget from (in priority order):
+    /// 1. The builder's explicit `expansion_budget` field
+    /// 2. `situation.bindings["expansion_budget"]` (parsed as u32)
+    /// 3. Default: 0 (no expansion, backward-compatible)
+    fn resolve_expansion_budget(&self, situation: &SituationContext) -> u32 {
+        if let Some(budget) = self.expansion_budget {
+            return budget;
+        }
+        if let Some(budget_str) = situation.bindings.get("expansion_budget") {
+            if let Ok(budget) = budget_str.parse::<u32>() {
+                return budget;
+            }
+        }
+        0
     }
 }
 
@@ -71,10 +103,27 @@ impl IntentBuilder for GenericIntentBuilder {
         let _span = info_span!("intent_building").entered();
 
         // 1. Select a pattern.
-        let pattern = select_pattern(&self.patterns, situation, rng).map_err(|e| {
-            IntentBuildError::InvalidSituation(format!("pattern selection failed: {e}"))
-        })?;
-        debug!(pattern_id = %pattern.id, pattern_name = %pattern.name, "pattern selected");
+        //    If bindings["pattern"] is set, use it as an explicit override.
+        //    Otherwise, fall back to tag-based weighted voting.
+        let pattern = if let Some(pattern_id) = situation.bindings.get("pattern") {
+            let p = self
+                .patterns
+                .iter()
+                .find(|p| p.id == *pattern_id)
+                .ok_or_else(|| {
+                    IntentBuildError::InvalidSituation(format!(
+                        "no pattern found with id '{pattern_id}'"
+                    ))
+                })?;
+            debug!(pattern_id = %p.id, pattern_name = %p.name, "pattern override from binding");
+            p
+        } else {
+            let p = select_pattern(&self.patterns, situation, rng).map_err(|e| {
+                IntentBuildError::InvalidSituation(format!("pattern selection failed: {e}"))
+            })?;
+            debug!(pattern_id = %p.id, pattern_name = %p.name, "pattern selected via voting");
+            p
+        };
 
         // 2. Look up vocabulary from bindings["theme"].
         let theme_id = situation
@@ -89,9 +138,25 @@ impl IntentBuilder for GenericIntentBuilder {
         })?;
         debug!(vocabulary = %vocabulary.id, "vocabulary resolved");
 
-        // 3. Fill pattern slots with vocabulary entries.
-        let filled = fill_pattern(pattern, vocabulary, rng)
-            .map_err(|e| IntentBuildError::InvalidSituation(format!("slot filling failed: {e}")))?;
+        // 3. Fill pattern slots with vocabulary entries (with optional composition).
+        let expansion_budget = self.resolve_expansion_budget(situation);
+        debug!(
+            expansion_budget = expansion_budget,
+            "expansion budget resolved"
+        );
+
+        let filled = {
+            let ctx = CompositionContext {
+                patterns: &self.patterns,
+                vocabulary: &vocabulary,
+                situation,
+                expansion_budget,
+                excluded_pattern_ids: vec![pattern.id.clone()],
+            };
+            fill_pattern_composed(pattern, &ctx, rng).map_err(|e| {
+                IntentBuildError::InvalidSituation(format!("slot filling failed: {e}"))
+            })?
+        };
         debug!(
             nodes = filled.graph.nodes.len(),
             edges = filled.graph.edges.len(),
@@ -380,6 +445,225 @@ mod tests {
         assert!(
             has_restricted,
             "crypt should have a RestrictedTraversal edge"
+        );
+    }
+
+    #[test]
+    fn explicit_pattern_override_selects_specified_pattern() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        // Use crypt theme but force linear_descent pattern (instead of lock_and_key).
+        let situation =
+            SituationContext::new(vec![Tag::from("noble_family"), Tag::from("sealed_crypt")])
+                .with_binding("theme", "undead_nobility")
+                .with_binding("pattern", "linear_descent");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let intent = builder.build(&situation, &mut rng).unwrap();
+
+        // linear_descent has Transition nodes (passage_1, passage_2) — lock_and_key does not.
+        let transition_count = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter(|n| n.role == NodeRole::Transition)
+            .count();
+        assert!(
+            transition_count >= 2,
+            "linear_descent should have at least 2 Transition nodes, got {}",
+            transition_count
+        );
+    }
+
+    #[test]
+    fn explicit_pattern_override_with_vermin_cellar() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        // Use vermin_cellar theme but force linear_descent (normally it would pick hub_and_spoke).
+        let situation = SituationContext::new(vec![
+            Tag::from("tavern"),
+            Tag::from("cellar"),
+            Tag::from("infested"),
+        ])
+        .with_binding("theme", "vermin_cellar")
+        .with_binding("pattern", "linear_descent");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let intent = builder.build(&situation, &mut rng).unwrap();
+
+        // Should still use vermin_cellar vocabulary (Building location).
+        assert_eq!(intent.location_kind, LocationKind::Building);
+
+        // Should have the linear chain structure.
+        let transition_count = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter(|n| n.role == NodeRole::Transition)
+            .count();
+        assert!(
+            transition_count >= 2,
+            "linear_descent forced on vermin_cellar should have Transition nodes, got {}",
+            transition_count
+        );
+
+        // Should still have vermin-themed labels from vocabulary.
+        let labels: Vec<&str> = intent
+            .structural_graph
+            .nodes
+            .iter()
+            .filter_map(|n| n.label.as_deref())
+            .collect();
+        let has_vermin_label = labels.iter().any(|l| {
+            l.contains("Cellar")
+                || l.contains("Rat")
+                || l.contains("Gnawed")
+                || l.contains("Pantry")
+                || l.contains("Grain")
+                || l.contains("Drain")
+                || l.contains("Warren")
+                || l.contains("Den")
+                || l.contains("Hatch")
+                || l.contains("Kitchen")
+        });
+        assert!(
+            has_vermin_label,
+            "expected vermin-themed labels, got: {:?}",
+            labels
+        );
+    }
+
+    #[test]
+    fn unknown_pattern_override_errors() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        let situation = SituationContext::new(vec![Tag::from("locked_vault")])
+            .with_binding("theme", "undead_nobility")
+            .with_binding("pattern", "nonexistent_pattern");
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let result = builder.build(&situation, &mut rng);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("nonexistent_pattern"),
+            "error should mention the bad pattern id: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn expansion_budget_zero_produces_flat_graph() {
+        let builder = GenericIntentBuilder::from_defaults()
+            .unwrap()
+            .with_expansion_budget(Some(0));
+        let situation = crypt_situation();
+        let mut rng = StdRng::seed_from_u64(42);
+
+        let intent = builder.build(&situation, &mut rng).unwrap();
+
+        // With budget=0, no node should have a dotted (namespaced) key.
+        for node in &intent.structural_graph.nodes {
+            assert!(
+                !node.key.contains('.'),
+                "budget=0 should produce flat graph, but found key '{}'",
+                node.key
+            );
+        }
+    }
+
+    #[test]
+    fn expansion_budget_from_binding() {
+        let builder = GenericIntentBuilder::from_defaults().unwrap();
+        // Use branching_exploration which has expandable branch_a and branch_b.
+        let situation =
+            SituationContext::new(vec![Tag::from("exploration"), Tag::from("sprawling")])
+                .with_binding("theme", "undead_nobility")
+                .with_binding("pattern", "branching_exploration")
+                .with_binding("expansion_budget", "2");
+
+        // Try many seeds — at least one should produce an expansion.
+        let mut expanded_any = false;
+        for seed in 0..50 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let intent = builder.build(&situation, &mut rng).unwrap();
+            if intent
+                .structural_graph
+                .nodes
+                .iter()
+                .any(|n| n.key.contains('.'))
+            {
+                expanded_any = true;
+                break;
+            }
+        }
+        assert!(
+            expanded_any,
+            "with expansion_budget=2 on branching_exploration, expected at least one expansion across 50 seeds"
+        );
+    }
+
+    #[test]
+    fn expansion_produces_valid_edges() {
+        let builder = GenericIntentBuilder::from_defaults()
+            .unwrap()
+            .with_expansion_budget(Some(2));
+        // Use branching_exploration which has expandable slots.
+        let situation =
+            SituationContext::new(vec![Tag::from("exploration"), Tag::from("sprawling")])
+                .with_binding("theme", "undead_nobility")
+                .with_binding("pattern", "branching_exploration");
+
+        for seed in 0..30 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let intent = builder.build(&situation, &mut rng).unwrap();
+            let graph = &intent.structural_graph;
+
+            let node_ids: std::collections::HashSet<_> = graph.nodes.iter().map(|n| n.id).collect();
+            for edge in &graph.edges {
+                assert!(
+                    node_ids.contains(&edge.from),
+                    "seed {}: edge from {:?} references missing node",
+                    seed,
+                    edge.from
+                );
+                assert!(
+                    node_ids.contains(&edge.to),
+                    "seed {}: edge to {:?} references missing node",
+                    seed,
+                    edge.to
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn with_expansion_budget_builder_method() {
+        let builder = GenericIntentBuilder::from_defaults()
+            .unwrap()
+            .with_expansion_budget(Some(3));
+        // Verify the builder respects the explicit budget over bindings.
+        let situation =
+            SituationContext::new(vec![Tag::from("exploration"), Tag::from("sprawling")])
+                .with_binding("theme", "undead_nobility")
+                .with_binding("pattern", "branching_exploration")
+                .with_binding("expansion_budget", "0"); // binding says 0, but builder overrides
+
+        // With explicit budget=3 on builder, expansion can still happen.
+        let mut expanded_any = false;
+        for seed in 0..50 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let intent = builder.build(&situation, &mut rng).unwrap();
+            if intent
+                .structural_graph
+                .nodes
+                .iter()
+                .any(|n| n.key.contains('.'))
+            {
+                expanded_any = true;
+                break;
+            }
+        }
+        assert!(
+            expanded_any,
+            "explicit builder budget=3 should override binding budget=0"
         );
     }
 }

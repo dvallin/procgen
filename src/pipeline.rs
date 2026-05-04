@@ -11,34 +11,60 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use tracing::{debug, info, info_span, warn};
 
+use crate::atmosphere::apply::apply_atmosphere_influences;
+use crate::atmosphere::profile::AtmosphereProfile;
 use crate::entity::plan::{EntityPlan, EntityPlanError};
 use crate::entity::planner::{EntityPlanner, SimpleEntityPlanner};
 use crate::entity::rules::EntityRule;
 use crate::feature::plan::{FeaturePlan, FeaturePlanError};
 use crate::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
+use crate::feature::registry::FeatureRegistry;
 use crate::feature::rules::FeatureRule;
+use crate::geometry::force_directed::{ForceDirectedConfig, ForceDirectedGeometryPlanner};
 use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
-    GeometryPlanError, GeometryPlanner, PlacementConfig, SimpleGeometryPlanner,
+    ColumnGeometryPlanner, GeometryPlanError, GeometryPlanner, PlacementConfig,
 };
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
 use crate::intent::generic_builder::GenericIntentBuilder;
 use crate::intent::map_intent::MapIntent;
+use crate::interior::builder::build_interior_plans;
+use crate::interior::paths::{compute_reserved_paths, find_room_doors};
+use crate::interior::plan::InteriorPlan;
+use crate::interior::template::InteriorTemplate;
 use crate::situation::SituationContext;
 use crate::spatial::plan::SpatialPlan;
 use crate::spatial::planner::{SimpleSpatialPlanner, SpatialPlanError, SpatialPlanner};
 use crate::tile::map::TileMap;
 use crate::tile::rasterize::{RasterizeError, Rasterizer, SimpleRasterizer};
 use crate::tile::registry::TileRegistry;
-use crate::tile::scatter::{TileScatterRule, apply_scatter};
+use crate::tile::scatter::scatter_room;
 use crate::validate::entity::{EntityValidationInput, EntityValidator};
 use crate::validate::feature::{FeatureValidationInput, FeatureValidator};
 use crate::validate::geometry::GeometryValidator;
 use crate::validate::{Severity, Validator};
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // PipelineConfig + RelaxationStrategy
 // ---------------------------------------------------------------------------
+
+/// Which geometry planner implementation to use.
+#[derive(Debug, Clone)]
+pub enum GeometryStrategy {
+    /// BFS column layout (the original `SimpleGeometryPlanner`).
+    /// Good for small maps (3–6 rooms) with linear or tree-like graphs.
+    Column,
+    /// Force-directed simulation layout.
+    /// Better for medium-to-large maps (7–15+ rooms) with complex topology.
+    ForceDirected,
+}
+
+impl Default for GeometryStrategy {
+    fn default() -> Self {
+        Self::ForceDirected
+    }
+}
 
 /// Strategy for relaxing constraints when a geometry retry is triggered.
 #[derive(Debug, Clone)]
@@ -67,8 +93,33 @@ pub struct PipelineConfig {
     pub entity_rules: Option<Vec<EntityRule>>,
     /// Optional tile registry override. If `None`, uses the default built-in registry.
     pub tile_registry: Option<TileRegistry>,
-    /// Optional tile scatter rules override. If `None`, loads from the default asset path.
-    pub scatter_rules: Option<Vec<TileScatterRule>>,
+    /// Optional feature registry override. If `None`, uses the default built-in registry.
+    pub feature_registry: Option<FeatureRegistry>,
+    /// Optional atmosphere profiles override. If `None`, loads from the default asset path.
+    pub atmosphere_profiles: Option<Vec<AtmosphereProfile>>,
+    /// Number of weighted samples to draw from each atmosphere palette per room.
+    /// Higher values produce denser, more varied atmosphere-driven content.
+    /// Default: 3.
+    pub atmosphere_sample_budget: usize,
+    /// Optional interior templates override. If `None`, loads from the default asset path.
+    pub interior_templates: Option<Vec<InteriorTemplate>>,
+
+    // ── Additive rule injection (merged with defaults, never replacing) ──
+    /// Additional feature rules merged *after* the base rules (default or override).
+    /// Use this to layer quest/event-specific features without replacing the entire ruleset.
+    pub additional_feature_rules: Vec<FeatureRule>,
+    /// Additional entity rules merged *after* the base rules (default or override).
+    /// Use this to layer quest/event-specific entities without replacing the entire ruleset.
+    pub additional_entity_rules: Vec<EntityRule>,
+    /// Additional atmosphere profiles merged *after* the base profiles (default or override).
+    /// Use this to inject temporary quest/event effects that activate on tag matches.
+    pub additional_atmospheres: Vec<AtmosphereProfile>,
+    /// Which geometry planner to use. Default: `ForceDirected`.
+    pub geometry_strategy: GeometryStrategy,
+    /// Optional expansion budget override for pattern composition.
+    /// Controls how many slots can be expanded into sub-patterns.
+    /// When `None`, derives from MapScale (Tiny=0, Small=1, Medium=2, Large=3, Huge=4).
+    pub expansion_budget: Option<u32>,
 }
 
 impl Default for PipelineConfig {
@@ -80,7 +131,15 @@ impl Default for PipelineConfig {
             feature_rules: None,
             entity_rules: None,
             tile_registry: None,
-            scatter_rules: None,
+            feature_registry: None,
+            atmosphere_profiles: None,
+            atmosphere_sample_budget: 3,
+            interior_templates: None,
+            additional_feature_rules: Vec::new(),
+            additional_entity_rules: Vec::new(),
+            additional_atmospheres: Vec::new(),
+            geometry_strategy: GeometryStrategy::default(),
+            expansion_budget: None,
         }
     }
 }
@@ -88,6 +147,47 @@ impl Default for PipelineConfig {
 // ---------------------------------------------------------------------------
 // PipelineResult
 // ---------------------------------------------------------------------------
+
+/// A named entity placed in a specific room (from situation directives).
+#[derive(Debug, Clone)]
+pub struct NamedEntityAnnotation {
+    /// The entity archetype ID.
+    pub archetype: crate::entity::plan::EntityArchetypeId,
+    /// The unique display name.
+    pub name: String,
+    /// The tile position where the entity was placed.
+    pub position: crate::geometry::geom::Point,
+}
+
+/// Annotation for a single room in the generated map.
+///
+/// Carries metadata that a world engine can use to correlate map output
+/// with narrative graph nodes — room labels, roles, positions, and doors.
+#[derive(Debug, Clone)]
+pub struct RoomAnnotation {
+    /// Internal space ID (matches [`SpaceId`] in [`SpatialPlan`]).
+    pub space_id: crate::spatial::plan::SpaceId,
+    /// Human-readable label (from vocabulary entry, e.g. "Ossuary").
+    pub label: Option<String>,
+    /// Narrative role of this room.
+    pub role: crate::intent::graph::NodeRole,
+    /// Structural tags on this room (e.g. "main_goal", "locked").
+    pub structural_tags: Vec<crate::tag::Tag>,
+    /// Bounding rectangle of the room in tile coordinates.
+    pub rect: crate::geometry::geom::Rect,
+    /// Door positions on the room boundary.
+    pub doors: Vec<crate::geometry::geom::Point>,
+    /// True if this room is the dungeon entry point.
+    pub is_entry: bool,
+    /// True if this room is the primary goal (has "main_goal" structural tag).
+    pub is_goal: bool,
+    /// Assigned letter for map overlay rendering (A, B, C, …).
+    pub letter: char,
+    /// Center point of the room (for letter overlay positioning).
+    pub center: crate::geometry::geom::Point,
+    /// Named entities placed in this room (from situation directives).
+    pub named_entities: Vec<NamedEntityAnnotation>,
+}
 
 /// Holds every intermediate and final output produced by a pipeline run.
 #[derive(Debug)]
@@ -104,6 +204,10 @@ pub struct PipelineResult {
     pub features: FeaturePlan,
     /// Placed entities (guards, rats, …).
     pub entities: EntityPlan,
+    /// Interior plans per room (zones, doors, reserved paths).
+    pub interiors: Vec<InteriorPlan>,
+    /// Room annotations for world-engine correlation.
+    pub annotations: Vec<RoomAnnotation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +338,8 @@ impl Pipeline {
     /// [`GenericIntentBuilder::from_defaults`] internally, then delegates to
     /// [`Pipeline::run_with`].
     pub fn run(&self, situation: &SituationContext) -> Result<PipelineResult, PipelineError> {
-        let builder = GenericIntentBuilder::from_defaults()?;
+        let builder = GenericIntentBuilder::from_defaults()?
+            .with_expansion_budget(self.config.expansion_budget);
         self.run_with(situation, &builder)
     }
 
@@ -279,8 +384,8 @@ impl Pipeline {
             "spatial plan ready"
         );
 
-        // ── 3. Geometry planning (retry loop) ──────────────────────────
-        let geometry = self.plan_geometry_with_retries(&spatial)?;
+        // ── 3. Geometry planning (retry loop) ──────────────────────
+        let geometry = self.plan_geometry_with_retries(&spatial, &mut rng)?;
 
         // ── 4. Rasterisation ───────────────────────────────────────
         info!("rasterising tiles");
@@ -291,53 +396,70 @@ impl Pipeline {
         let mut tiles = SimpleRasterizer.rasterize(&geometry, &registry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
 
-        // ── 4b. Tile scatter ───────────────────────────────────────────
-        let scatter_rules = match &self.config.scatter_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_tile_scatter_rules()
-                .expect("embedded tile scatter rules are valid JSON"),
-        };
-        if !scatter_rules.is_empty() {
-            info!(rules = scatter_rules.len(), "applying tile scatter");
-            apply_scatter(
-                &mut tiles,
-                &geometry,
-                &spatial,
-                &scatter_rules,
-                &registry,
-                &mut rng,
-            );
-        }
+        // ── 4b. Pre-compute reserved paths for scatter safety ──────────
+        let reserved_per_room: HashMap<
+            crate::spatial::plan::SpaceId,
+            HashSet<crate::geometry::geom::Point>,
+        > = geometry
+            .spaces
+            .iter()
+            .map(|placed| {
+                let doors = find_room_doors(&tiles, placed.rect);
+                let (_, reserved) = compute_reserved_paths(&tiles, placed.rect, &doors);
+                (placed.space_id, reserved)
+            })
+            .collect();
 
-        // ── Resolve rule sets ──────────────────────────────────────────
-        let feature_rules = match &self.config.feature_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_feature_rules()
-                .expect("embedded feature rules are valid JSON"),
-        };
-        let entity_rules = match &self.config.entity_rules {
-            Some(rules) => rules.clone(),
-            None => crate::asset::load::load_default_entity_rules()
-                .expect("embedded entity rules are valid JSON"),
-        };
+        // ── 5. Atmosphere (scatter + per-room rules) ───────────────
+        let (per_room_feature_rules, per_room_entity_rules) = self.apply_atmosphere(
+            &spatial,
+            &geometry,
+            &mut tiles,
+            &registry,
+            &mut rng,
+            &reserved_per_room,
+        );
 
-        // ── 5. Feature planning + validation ───────────────────────────
+        // ── 5b. Interior planning ──────────────────────────────────────
+        info!("computing interior plans");
+        let interiors = build_interior_plans(&geometry, &tiles);
+        debug!(rooms = interiors.len(), "interior plans ready");
+
+        // ── 6. Feature planning + validation ───────────────────────
         info!("planning features");
-        let features =
-            SimpleFeaturePlanner.plan(&spatial, &geometry, &tiles, &feature_rules, &mut rng)?;
+        let feature_rules = self.resolve_feature_rules();
+        let interior_templates = self.resolve_interior_templates();
+        let features = SimpleFeaturePlanner.plan(
+            &spatial,
+            &geometry,
+            &tiles,
+            &feature_rules,
+            &per_room_feature_rules,
+            &interiors,
+            &interior_templates,
+            &mut rng,
+        )?;
         self.validate_features(&features, &tiles, &geometry, &spatial)?;
 
-        // ── 6. Entity planning + validation ───────────────────────────
+        // ── 7. Entity planning + validation ────────────────────────
         info!("planning entities");
+        let entity_rules = self.resolve_entity_rules();
         let entities = SimpleEntityPlanner.plan(
             &spatial,
             &geometry,
             &tiles,
             &features,
             &entity_rules,
+            &per_room_entity_rules,
+            &situation.directives,
             &mut rng,
         )?;
         self.validate_entities(&entities, &features, &tiles, &geometry, &spatial)?;
+
+        // ── 8. Build annotations ─────────────────────────────────────────────
+        info!("building annotations");
+        let annotations = Self::build_annotations(&spatial, &geometry, &tiles, &entities);
+        debug!(count = annotations.len(), "annotations ready");
 
         info!("pipeline complete");
         Ok(PipelineResult {
@@ -347,10 +469,83 @@ impl Pipeline {
             tiles,
             features,
             entities,
+            interiors,
+            annotations,
         })
     }
 
-    // ── internal helpers ───────────────────────────────────────────────
+    // ── internal helpers ─────────────────────────────────────────────────────
+
+    /// Build room annotations from the spatial plan and geometry.
+    ///
+    /// Each room gets a letter (A, B, C, …), its center point, label, role,
+    /// structural tags, bounding rect, door positions, and Entry/Goal flags.
+    fn build_annotations(
+        spatial: &SpatialPlan,
+        geometry: &GeometryPlan,
+        tiles: &TileMap,
+        entities: &EntityPlan,
+    ) -> Vec<RoomAnnotation> {
+        use crate::intent::graph::NodeRole;
+        use crate::interior::paths::find_room_doors;
+        use crate::tag::Tag;
+
+        let spec_map: std::collections::HashMap<
+            crate::spatial::plan::SpaceId,
+            &crate::spatial::plan::SpaceSpec,
+        > = spatial.spaces.iter().map(|s| (s.id, s)).collect();
+
+        let mut annotations = Vec::new();
+        let mut letter = b'A';
+
+        for placed in &geometry.spaces {
+            let Some(spec) = spec_map.get(&placed.space_id) else {
+                continue;
+            };
+
+            let doors = find_room_doors(tiles, placed.rect);
+            let center = crate::geometry::geom::Point {
+                x: placed.rect.x + placed.rect.w / 2,
+                y: placed.rect.y + placed.rect.h / 2,
+            };
+
+            let is_entry = spec.role == NodeRole::Entry;
+            let is_goal = spec.structural_tags.contains(&Tag::from("main_goal"));
+
+            let assigned_letter = letter as char;
+            if letter < b'Z' {
+                letter += 1;
+            }
+
+            // Collect named entities for this room.
+            let named_entities: Vec<NamedEntityAnnotation> = entities
+                .entities
+                .iter()
+                .filter(|e| e.space_id == placed.space_id && e.name.is_some())
+                .map(|e| NamedEntityAnnotation {
+                    archetype: e.archetype.clone(),
+                    name: e.name.clone().unwrap(),
+                    position: e.position,
+                })
+                .collect();
+
+            annotations.push(RoomAnnotation {
+                space_id: placed.space_id,
+                label: spec.label.clone(),
+                role: spec.role,
+                structural_tags: spec.structural_tags.clone(),
+                rect: placed.rect,
+                doors,
+                is_entry,
+                is_goal,
+                letter: assigned_letter,
+                center,
+                named_entities,
+            });
+        }
+
+        annotations
+    }
 
     /// Run geometry planning with a retry loop governed by [`PipelineConfig`].
     ///
@@ -359,6 +554,7 @@ impl Pipeline {
     fn plan_geometry_with_retries(
         &self,
         spatial: &SpatialPlan,
+        rng: &mut StdRng,
     ) -> Result<GeometryPlan, PipelineError> {
         let _span = info_span!("geometry_retry_loop").entered();
         let base_config = PlacementConfig::default();
@@ -371,11 +567,27 @@ impl Pipeline {
                 attempt = attempt,
                 min_gap = config.min_gap,
                 separation_gap = config.separation_gap,
+                strategy = ?self.config.geometry_strategy,
                 "geometry attempt"
             );
 
-            let planner = SimpleGeometryPlanner { config };
-            let plan = match planner.plan(spatial) {
+            let plan = match &self.config.geometry_strategy {
+                GeometryStrategy::Column => {
+                    let planner = ColumnGeometryPlanner { config };
+                    planner.plan(spatial, rng)
+                }
+                GeometryStrategy::ForceDirected => {
+                    let planner = ForceDirectedGeometryPlanner {
+                        config: ForceDirectedConfig {
+                            placement: config,
+                            ..ForceDirectedConfig::default()
+                        },
+                    };
+                    planner.plan(spatial, rng)
+                }
+            };
+
+            let plan = match plan {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(attempt = attempt, error = %e, "geometry planning error");
@@ -493,6 +705,132 @@ impl Pipeline {
             })
         }
     }
+
+    /// Resolve feature rules from config or defaults, then append any additional rules.
+    fn resolve_feature_rules(&self) -> Vec<FeatureRule> {
+        let mut rules = match &self.config.feature_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_feature_rules()
+                .expect("embedded feature rules are valid JSON"),
+        };
+        rules.extend(self.config.additional_feature_rules.iter().cloned());
+        rules
+    }
+
+    /// Resolve entity rules from config or defaults, then append any additional rules.
+    fn resolve_entity_rules(&self) -> Vec<EntityRule> {
+        let mut rules = match &self.config.entity_rules {
+            Some(rules) => rules.clone(),
+            None => crate::asset::load::load_default_entity_rules()
+                .expect("embedded entity rules are valid JSON"),
+        };
+        rules.extend(self.config.additional_entity_rules.iter().cloned());
+        rules
+    }
+
+    /// Resolve interior templates from config or defaults.
+    fn resolve_interior_templates(&self) -> Vec<InteriorTemplate> {
+        match &self.config.interior_templates {
+            Some(templates) => templates.clone(),
+            None => crate::asset::load::load_default_interior_templates()
+                .expect("embedded interior templates are valid JSON"),
+        }
+    }
+
+    /// Apply atmosphere profiles: sample contributions per room, apply scatter
+    /// to tiles, and return per-room feature/entity rules for downstream planners.
+    fn apply_atmosphere(
+        &self,
+        spatial: &SpatialPlan,
+        geometry: &GeometryPlan,
+        tiles: &mut TileMap,
+        registry: &TileRegistry,
+        rng: &mut StdRng,
+        reserved_per_room: &HashMap<
+            crate::spatial::plan::SpaceId,
+            HashSet<crate::geometry::geom::Point>,
+        >,
+    ) -> (
+        HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>>,
+        HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>>,
+    ) {
+        let mut atmosphere_profiles = match &self.config.atmosphere_profiles {
+            Some(profiles) => profiles.clone(),
+            None => crate::asset::load::load_default_atmosphere_profiles()
+                .expect("embedded atmosphere profiles are valid JSON"),
+        };
+        atmosphere_profiles.extend(self.config.additional_atmospheres.iter().cloned());
+
+        let mut per_room_feature_rules: HashMap<crate::spatial::plan::SpaceId, Vec<FeatureRule>> =
+            HashMap::new();
+        let mut per_room_entity_rules: HashMap<crate::spatial::plan::SpaceId, Vec<EntityRule>> =
+            HashMap::new();
+
+        if atmosphere_profiles.is_empty() {
+            return (per_room_feature_rules, per_room_entity_rules);
+        }
+
+        let _span = info_span!(
+            "atmosphere_planning",
+            profiles = atmosphere_profiles.len(),
+            rooms = spatial.spaces.len(),
+        )
+        .entered();
+
+        info!(
+            profiles = atmosphere_profiles.len(),
+            "applying atmosphere profiles"
+        );
+
+        // Pass 1: sample atmosphere contributions for every room.
+        let mut per_room_scatter: HashMap<
+            crate::spatial::plan::SpaceId,
+            Vec<crate::tile::scatter::TileScatterRule>,
+        > = HashMap::new();
+
+        for spec in &spatial.spaces {
+            let contrib = apply_atmosphere_influences(
+                &atmosphere_profiles,
+                spec,
+                self.config.atmosphere_sample_budget,
+                rng,
+            );
+
+            if !contrib.scatter_rules.is_empty() {
+                per_room_scatter.insert(spec.id, contrib.scatter_rules);
+            }
+            if !contrib.feature_rules.is_empty() {
+                per_room_feature_rules.insert(spec.id, contrib.feature_rules);
+            }
+            if !contrib.entity_rules.is_empty() {
+                per_room_entity_rules.insert(spec.id, contrib.entity_rules);
+            }
+        }
+
+        // Pass 2: apply scatter rules per room (iterating geometry spaces
+        // to preserve the original RNG consumption order).
+        for placed in &geometry.spaces {
+            if let Some(rules) = per_room_scatter.get(&placed.space_id) {
+                let reserved = reserved_per_room
+                    .get(&placed.space_id)
+                    .cloned()
+                    .unwrap_or_default();
+                scatter_room(tiles, placed.rect, rules, registry, rng, &reserved);
+            }
+        }
+
+        let matched_rooms = per_room_scatter
+            .len()
+            .max(per_room_feature_rules.len())
+            .max(per_room_entity_rules.len());
+        info!(
+            matched_rooms = matched_rooms,
+            total_rooms = spatial.spaces.len(),
+            "atmosphere matching complete"
+        );
+
+        (per_room_feature_rules, per_room_entity_rules)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -521,6 +859,10 @@ mod tests {
         assert!(cfg.seed.is_none());
         assert!(cfg.feature_rules.is_none());
         assert!(cfg.entity_rules.is_none());
+        assert!(cfg.interior_templates.is_none());
+        assert!(cfg.additional_feature_rules.is_empty());
+        assert!(cfg.additional_entity_rules.is_empty());
+        assert!(cfg.additional_atmospheres.is_empty());
         match &cfg.relaxation {
             RelaxationStrategy::IncreaseSpacing { step } => assert_eq!(*step, 2),
             RelaxationStrategy::None => panic!("expected IncreaseSpacing"),
@@ -533,11 +875,7 @@ mod tests {
             config: PipelineConfig {
                 max_retries: 1,
                 relaxation: RelaxationStrategy::None,
-                seed: None,
-                feature_rules: None,
-                entity_rules: None,
-                tile_registry: None,
-                scatter_rules: None,
+                ..PipelineConfig::default()
             },
         };
         let base = PlacementConfig::default();
@@ -552,11 +890,7 @@ mod tests {
             config: PipelineConfig {
                 max_retries: 5,
                 relaxation: RelaxationStrategy::IncreaseSpacing { step: 3 },
-                seed: None,
-                feature_rules: None,
-                entity_rules: None,
-                tile_registry: None,
-                scatter_rules: None,
+                ..PipelineConfig::default()
             },
         };
         let base = PlacementConfig {

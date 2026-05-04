@@ -4,6 +4,7 @@ use tracing::{debug, info, info_span};
 
 use crate::intent::graph::*;
 use crate::intent::map_intent::MapIntent;
+use crate::spatial::plan::classify_tags;
 use crate::spatial::plan::*;
 use crate::tag::Tag;
 
@@ -54,11 +55,15 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             // Resolve concrete dimensions from size_hint + archetype.
             let (width, height) = resolve_dimensions(size_hint, archetype);
 
+            let (structural, atmosphere) = classify_tags(&node.tags);
+
             spaces.push(SpaceSpec {
                 id,
                 origin: node.id,
                 role: node.role,
-                tags: node.tags.clone(),
+                structural_tags: structural,
+                atmosphere_tags: atmosphere,
+                motifs: vec![],
                 style: RealizationStyle::RoomLike,
                 kind: SpaceKind::Atomic(AtomicSpace { width, height }),
                 label: node.label.clone(),
@@ -127,6 +132,7 @@ impl SpatialPlanner for SimpleSpatialPlanner {
             spaces,
             links,
             constraints,
+            location_kind: intent.location_kind,
         })
     }
 }
@@ -417,8 +423,17 @@ mod tests {
             let node_tags: Vec<_> = graph.nodes.iter().map(|n| n.tags.clone()).collect();
             let intent = wrap_in_intent(graph);
             let plan = planner.plan(&intent).unwrap();
-            for (space, tags) in plan.spaces.iter().zip(node_tags.iter()) {
-                prop_assert_eq!(&space.tags, tags);
+            for (space, original_tags) in plan.spaces.iter().zip(node_tags.iter()) {
+                // All original tags should be preserved across the classified fields.
+                let all_tags: Vec<Tag> = space.structural_tags.iter()
+                    .chain(space.atmosphere_tags.iter())
+                    .chain(space.motifs.iter())
+                    .cloned()
+                    .collect();
+                prop_assert_eq!(all_tags.len(), original_tags.len());
+                for tag in original_tags {
+                    prop_assert!(space.has_tag(tag), "tag {:?} should be preserved", tag);
+                }
             }
         }
 

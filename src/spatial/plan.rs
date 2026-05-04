@@ -102,7 +102,12 @@ pub struct SpaceSpec {
     pub id: SpaceId,
     pub origin: ScenarioNodeId,
     pub role: NodeRole,
-    pub tags: Vec<Tag>,
+    /// Structural tags — hard triggers for gameplay mechanics (e.g. "main_goal", "locked", "contains_key", "optional", "secret", "hidden").
+    pub structural_tags: Vec<Tag>,
+    /// Atmosphere tags — soft flavor that influences scatter, features, decorations (e.g. "damp", "overgrown", "vast").
+    pub atmosphere_tags: Vec<Tag>,
+    /// Motif tags — cross-cutting directives applied by the narrative system (e.g. "rat_infestation").
+    pub motifs: Vec<Tag>,
     pub style: RealizationStyle,
     pub kind: SpaceKind,
     pub label: Option<String>,
@@ -110,6 +115,61 @@ pub struct SpaceSpec {
     pub archetype: Option<SpaceArchetype>,
     /// Size hint — guides the geometry planner's dimension choices.
     pub size_hint: SizeHint,
+}
+
+impl SpaceSpec {
+    /// Returns all tags combined (structural + atmosphere + motifs).
+    /// Useful for backward-compatible rule matching that checks against any tag.
+    pub fn all_tags(&self) -> Vec<&Tag> {
+        self.structural_tags
+            .iter()
+            .chain(self.atmosphere_tags.iter())
+            .chain(self.motifs.iter())
+            .collect()
+    }
+
+    /// Check if any tag field contains the given tag.
+    pub fn has_tag(&self, tag: &Tag) -> bool {
+        self.structural_tags.contains(tag)
+            || self.atmosphere_tags.contains(tag)
+            || self.motifs.contains(tag)
+    }
+
+    /// Check if structural_tags contains the given tag.
+    pub fn has_structural_tag(&self, tag: &Tag) -> bool {
+        self.structural_tags.contains(tag)
+    }
+
+    /// Check if atmosphere_tags contains the given tag.
+    pub fn has_atmosphere_tag(&self, tag: &Tag) -> bool {
+        self.atmosphere_tags.contains(tag)
+    }
+}
+
+/// Known structural tags — these trigger gameplay mechanics and should be
+/// in `structural_tags`, not `atmosphere_tags`.
+pub const STRUCTURAL_TAG_NAMES: &[&str] = &[
+    "main_goal",
+    "locked",
+    "optional",
+    "contains_key",
+    "secret",
+    "hidden",
+];
+
+/// Classify a list of raw tags into (structural, atmosphere) buckets.
+/// Tags whose name is in `STRUCTURAL_TAG_NAMES` go to structural, all others to atmosphere.
+pub fn classify_tags(raw_tags: &[Tag]) -> (Vec<Tag>, Vec<Tag>) {
+    let mut structural = Vec::new();
+    let mut atmosphere = Vec::new();
+    for tag in raw_tags {
+        if STRUCTURAL_TAG_NAMES.contains(&tag.0.as_str()) {
+            structural.push(tag.clone());
+        } else {
+            atmosphere.push(tag.clone());
+        }
+    }
+    (structural, atmosphere)
 }
 
 #[derive(Debug, Clone)]
@@ -127,4 +187,7 @@ pub struct SpatialPlan {
     pub links: Vec<SpaceLink>,
     /// Constraints derived from the intent or inferred by the planner.
     pub constraints: Vec<SpatialConstraint>,
+    /// The map's location kind — propagated from MapIntent for downstream use
+    /// (e.g. geometry shape refinement, feature placement).
+    pub location_kind: crate::intent::map_intent::LocationKind,
 }

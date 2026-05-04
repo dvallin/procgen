@@ -11,4 +11,5 @@ pub fn build_cave_situation() -> SituationContext {
     ])
     .with_binding("location", "cave")
     .with_binding("theme", "natural_cave")
+    .with_binding("expansion_budget", "1")
 }

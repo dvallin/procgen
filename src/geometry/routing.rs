@@ -492,6 +492,7 @@ fn intersects_any_room_y(y: i32, x_min: i32, x_max: i32, rooms: &[PlacedSpace]) 
 mod tests {
     use super::*;
     use crate::intent::graph::{EdgeRole, NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::{
         AtomicSpace, RealizationStyle, SizeHint, SpaceArchetype, SpaceId, SpaceKind, SpaceLink,
         SpaceSpec, SpatialPlan,
@@ -511,7 +512,9 @@ mod tests {
             archetype: Some(SpaceArchetype::Chamber),
             size_hint: SizeHint::Medium,
             style: RealizationStyle::RoomLike,
-            tags: vec![],
+            structural_tags: vec![],
+            atmosphere_tags: vec![],
+            motifs: vec![],
             label: None,
         }
     }
@@ -540,6 +543,7 @@ mod tests {
                 tags: vec![],
             }],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         }
     }
 
@@ -670,6 +674,7 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let placed = vec![
@@ -735,6 +740,7 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let placed = vec![
@@ -789,6 +795,7 @@ mod tests {
                 tags: vec![],
             }],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let placed = vec![
@@ -845,6 +852,7 @@ mod tests {
                 },
             ],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let placed = vec![
@@ -937,6 +945,7 @@ mod tests {
                 tags: vec![],
             }],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         // Room 0 at (20, 50), room 1 at (30, 2), blocking rooms 2+3 stacked between.
@@ -1006,6 +1015,7 @@ mod tests {
                 tags: vec![],
             }],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         };
 
         let placed = vec![

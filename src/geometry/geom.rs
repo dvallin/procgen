@@ -181,6 +181,30 @@ impl Rect {
         }
     }
 
+    /// Compute the x-axis gap between two rects.
+    /// Returns 0 if they overlap or touch along the x axis.
+    pub fn gap_x(&self, other: &Rect) -> i32 {
+        if self.x + self.w <= other.x {
+            other.x - (self.x + self.w)
+        } else if other.x + other.w <= self.x {
+            self.x - (other.x + other.w)
+        } else {
+            0
+        }
+    }
+
+    /// Compute the y-axis gap between two rects.
+    /// Returns 0 if they overlap or touch along the y axis.
+    pub fn gap_y(&self, other: &Rect) -> i32 {
+        if self.y + self.h <= other.y {
+            other.y - (self.y + self.h)
+        } else if other.y + other.h <= self.y {
+            self.y - (other.y + other.h)
+        } else {
+            0
+        }
+    }
+
     /// Returns an iterator over all `Point`s in this rect, row by row (top to bottom, left to right).
     pub fn iter_points(&self) -> RectPointIter {
         RectPointIter {

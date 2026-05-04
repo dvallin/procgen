@@ -1,6 +1,6 @@
 [
   {
-    "kind": "Chest",
+    "feature_type": "chest",
     "strategy": "Center",
     "required": true,
     "max_count": 1,
@@ -9,7 +9,7 @@
     "match_tag": "contains_key"
   },
   {
-    "kind": "Table",
+    "feature_type": "table",
     "strategy": "Center",
     "required": false,
     "max_count": 1,
@@ -18,16 +18,7 @@
     "match_tag": null
   },
   {
-    "kind": "Barrel",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": "Hub",
-    "match_archetype": null,
-    "match_tag": null
-  },
-  {
-    "kind": "Chest",
+    "feature_type": "chest",
     "strategy": "Center",
     "required": true,
     "max_count": 1,
@@ -36,18 +27,7 @@
     "match_tag": null
   },
   {
-    "kind": {
-      "Decoration": "torch"
-    },
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": "Entry",
-    "match_archetype": null,
-    "match_tag": null
-  },
-  {
-    "kind": "Sarcophagus",
+    "feature_type": "sarcophagus",
     "strategy": "Center",
     "required": true,
     "max_count": 1,
@@ -56,74 +36,12 @@
     "match_tag": "main_goal"
   },
   {
-    "kind": {
-      "Decoration": "torch"
-    },
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": "Vault",
-    "match_tag": "main_goal"
-  },
-  {
-    "kind": "Barrel",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "barrels"
-  },
-  {
-    "kind": "Shelf",
-    "strategy": "WallAdjacent",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "food"
-  },
-  {
-    "kind": "Chest",
+    "feature_type": "chest",
     "strategy": "Corner",
     "required": false,
     "max_count": 1,
     "match_role": null,
     "match_archetype": null,
     "match_tag": "smuggling"
-  },
-  {
-    "kind": {
-      "Decoration": "moss"
-    },
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 3,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "overgrown"
-  },
-  {
-    "kind": {
-      "Decoration": "stalagmite"
-    },
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 2,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "vast"
-  },
-  {
-    "kind": {
-      "Decoration": "fungus"
-    },
-    "strategy": "RandomFloor",
-    "required": false,
-    "max_count": 3,
-    "match_role": null,
-    "match_archetype": null,
-    "match_tag": "luminous"
   }
 ]

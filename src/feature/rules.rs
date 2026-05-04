@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::feature::placement::PlacementStrategy;
-use crate::feature::plan::FeatureKind;
+use crate::feature::registry::FeatureType;
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceArchetype, SpaceSpec};
 use crate::tag::Tag;
@@ -17,8 +17,8 @@ use crate::tag::Tag;
 /// `match_tag` set only fires when the space satisfies *both*.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeatureRule {
-    /// What feature to place.
-    pub kind: FeatureKind,
+    /// What feature type to place (data-driven identifier).
+    pub feature_type: FeatureType,
     /// How to position it inside the room.
     pub strategy: PlacementStrategy,
     /// If true, the planner must error when it can't place this feature.
@@ -47,7 +47,7 @@ impl FeatureRule {
             return false;
         }
         if let Some(ref tag) = self.match_tag
-            && !spec.tags.contains(tag)
+            && !spec.has_tag(tag)
         {
             return false;
         }
@@ -73,16 +73,22 @@ pub fn matching_rules<'a>(rules: &'a [FeatureRule], spec: &SpaceSpec) -> Vec<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feature::plan::Feature;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
     use crate::spatial::plan::*;
 
     /// Helper: build a minimal SpaceSpec with the given role, archetype, and tags.
     fn make_spec(role: NodeRole, archetype: Option<SpaceArchetype>, tags: &[&str]) -> SpaceSpec {
+        use crate::spatial::plan::classify_tags;
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpaceSpec {
             id: SpaceId(0),
             origin: ScenarioNodeId(0),
             role,
-            tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+            structural_tags: structural,
+            atmosphere_tags: atmosphere,
+            motifs: vec![],
             style: RealizationStyle::RoomLike,
             kind: SpaceKind::Atomic(AtomicSpace {
                 width: 5,
@@ -95,64 +101,30 @@ mod tests {
     }
 
     #[test]
-    fn crypt_vault_gets_sarcophagus_and_torches() {
+    fn crypt_vault_gets_sarcophagus() {
         let spec = make_spec(NodeRole::Goal, Some(SpaceArchetype::Vault), &["main_goal"]);
         let rules = default_rules();
         let matched = matching_rules(&rules, &spec);
 
-        let kinds: Vec<&FeatureKind> = matched.iter().map(|r| &r.kind).collect();
+        let types: Vec<&FeatureType> = matched.iter().map(|r| &r.feature_type).collect();
         assert!(
-            kinds.contains(&&FeatureKind::Sarcophagus),
+            types.contains(&&FeatureType::from(Feature::SARCOPHAGUS)),
             "vault with main_goal should get a sarcophagus, got: {:?}",
-            kinds
-        );
-        assert!(
-            kinds.contains(&&FeatureKind::Decoration("torch".into())),
-            "vault with main_goal should get torches, got: {:?}",
-            kinds
+            types
         );
     }
 
     #[test]
-    fn tavern_hub_gets_table_and_barrels() {
-        let spec = make_spec(
-            NodeRole::Hub,
-            Some(SpaceArchetype::Hall),
-            &["barrels", "damp"],
-        );
+    fn tavern_hub_gets_table() {
+        let spec = make_spec(NodeRole::Hub, Some(SpaceArchetype::Hall), &["noble"]);
         let rules = default_rules();
         let matched = matching_rules(&rules, &spec);
 
-        let kinds: Vec<&FeatureKind> = matched.iter().map(|r| &r.kind).collect();
+        let types: Vec<&FeatureType> = matched.iter().map(|r| &r.feature_type).collect();
         assert!(
-            kinds.contains(&&FeatureKind::Table),
+            types.contains(&&FeatureType::from(Feature::TABLE)),
             "hub should get a table, got: {:?}",
-            kinds
-        );
-        // Should match both the Hub barrel rule AND the "barrels" tag rule.
-        let barrel_count = kinds.iter().filter(|k| ***k == FeatureKind::Barrel).count();
-        assert!(
-            barrel_count >= 2,
-            "hub with 'barrels' tag should match ≥2 barrel rules, got: {}",
-            barrel_count
-        );
-    }
-
-    #[test]
-    fn pantry_gets_shelf_from_food_tag() {
-        let spec = make_spec(
-            NodeRole::Branch,
-            Some(SpaceArchetype::Chamber),
-            &["optional", "food"],
-        );
-        let rules = default_rules();
-        let matched = matching_rules(&rules, &spec);
-
-        let kinds: Vec<&FeatureKind> = matched.iter().map(|r| &r.kind).collect();
-        assert!(
-            kinds.contains(&&FeatureKind::Shelf),
-            "room with 'food' tag should get a shelf, got: {:?}",
-            kinds
+            types
         );
     }
 
@@ -168,7 +140,7 @@ mod tests {
 
         let chest_rules: Vec<&&FeatureRule> = matched
             .iter()
-            .filter(|r| r.kind == FeatureKind::Chest)
+            .filter(|r| r.feature_type == FeatureType::from(Feature::CHEST))
             .collect();
         assert!(
             !chest_rules.is_empty(),
@@ -189,7 +161,7 @@ mod tests {
         assert!(
             matched.is_empty(),
             "a plain gate/vestibule with only 'locked' tag should match no feature rules, got: {:?}",
-            matched.iter().map(|r| &r.kind).collect::<Vec<_>>()
+            matched.iter().map(|r| &r.feature_type).collect::<Vec<_>>()
         );
     }
 
@@ -201,7 +173,7 @@ mod tests {
 
         assert_eq!(rules.len(), deserialized.len());
         for (orig, deser) in rules.iter().zip(deserialized.iter()) {
-            assert_eq!(orig.kind, deser.kind);
+            assert_eq!(orig.feature_type, deser.feature_type);
             assert_eq!(orig.strategy, deser.strategy);
             assert_eq!(orig.required, deser.required);
             assert_eq!(orig.max_count, deser.max_count);
@@ -218,7 +190,9 @@ mod tests {
 
         assert_eq!(rules.len(), default_rules().len());
         // Verify a known rule deserialized correctly.
-        let sarcophagus_rule = rules.iter().find(|r| r.kind == FeatureKind::Sarcophagus);
+        let sarcophagus_rule = rules
+            .iter()
+            .find(|r| r.feature_type == FeatureType::from(Feature::SARCOPHAGUS));
         assert!(sarcophagus_rule.is_some(), "should find sarcophagus rule");
         let rule = sarcophagus_rule.unwrap();
         assert!(rule.required);
@@ -227,9 +201,9 @@ mod tests {
     }
 
     #[test]
-    fn serde_decoration_variant_round_trips() {
+    fn serde_feature_type_round_trips() {
         let rule = FeatureRule {
-            kind: FeatureKind::Decoration("banner".into()),
+            feature_type: FeatureType::from("banner"),
             strategy: PlacementStrategy::WallAdjacent,
             required: false,
             max_count: 3,
@@ -239,7 +213,7 @@ mod tests {
         };
         let json = serde_json::to_string(&rule).unwrap();
         let deser: FeatureRule = serde_json::from_str(&json).unwrap();
-        assert_eq!(deser.kind, FeatureKind::Decoration("banner".into()));
+        assert_eq!(deser.feature_type, FeatureType::from("banner"));
         assert_eq!(deser.match_role, Some(NodeRole::Hub));
         assert_eq!(deser.match_tag, Some(Tag::from("noble")));
     }

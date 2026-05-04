@@ -241,9 +241,11 @@ fn check_door_tile(plan: &EntityPlan, tiles: &TileMap, issues: &mut Vec<Validati
 mod tests {
     use super::*;
     use crate::entity::plan::{EntityArchetypeId, EntityPlacement};
-    use crate::feature::plan::{FeatureKind, FeaturePlacement};
+    use crate::feature::plan::FeaturePlacement;
+    use crate::feature::registry::FeatureType;
     use crate::geometry::geom::*;
     use crate::intent::graph::{NodeRole, ScenarioNodeId};
+    use crate::intent::map_intent::LocationKind;
     use crate::spatial::plan::*;
     use crate::tag::Tag;
 
@@ -296,12 +298,16 @@ mod tests {
     }
 
     fn make_spatial(role: NodeRole, tags: &[&str]) -> SpatialPlan {
+        let raw_tags: Vec<Tag> = tags.iter().map(|s| Tag::from(*s)).collect();
+        let (structural, atmosphere) = classify_tags(&raw_tags);
         SpatialPlan {
             spaces: vec![SpaceSpec {
                 id: SpaceId(0),
                 origin: ScenarioNodeId(0),
                 role,
-                tags: tags.iter().map(|s| Tag::from(*s)).collect(),
+                structural_tags: structural,
+                atmosphere_tags: atmosphere,
+                motifs: vec![],
                 style: RealizationStyle::RoomLike,
                 kind: SpaceKind::Atomic(AtomicSpace {
                     width: 5,
@@ -313,12 +319,14 @@ mod tests {
             }],
             links: vec![],
             constraints: vec![],
+            location_kind: LocationKind::Dungeon,
         }
     }
 
     fn make_entity(archetype: &str, x: i32, y: i32) -> EntityPlacement {
         EntityPlacement {
             archetype: EntityArchetypeId::from(archetype),
+            name: None,
             position: Point { x, y },
             space_id: SpaceId(0),
             behavior_tags: vec![],
@@ -391,7 +399,7 @@ mod tests {
         let spatial = make_spatial(NodeRole::Hub, &["noble"]);
         let features = FeaturePlan {
             features: vec![FeaturePlacement {
-                kind: FeatureKind::Barrel,
+                feature_type: FeatureType::from("barrel"),
                 anchor: Point { x: 3, y: 3 },
                 cells: vec![Point { x: 3, y: 3 }],
                 space_id: SpaceId(0),
@@ -514,6 +522,7 @@ mod tests {
         let entities = EntityPlan {
             entities: vec![EntityPlacement {
                 archetype: EntityArchetypeId::from("skeleton"),
+                name: None,
                 position: Point { x: 3, y: 3 },
                 space_id: SpaceId(0),
                 behavior_tags: vec![],

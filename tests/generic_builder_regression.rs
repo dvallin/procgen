@@ -12,7 +12,7 @@ use procgen::intent::graph::{EdgeRole, NodeRole};
 use procgen::intent::map_intent::{IntentConstraint, LocationKind, MapIntent};
 use procgen::pipeline::{Pipeline, PipelineConfig};
 use procgen::situation::SituationContext;
-use procgen::tile::ascii::render_ascii_with_entities;
+use procgen::tile::ascii::render_ascii_default;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
@@ -395,6 +395,10 @@ fn pipeline_tavern_all_seeds_succeed() {
 }
 
 /// Pipeline results should have non-empty features and entities for both scenarios.
+///
+/// Note: after cosmetic rules (barrels, torches) moved to the atmosphere system,
+/// some tavern seeds may produce no structural features.  The tavern assertion
+/// therefore only checks entities; atmosphere-driven features are applied later.
 #[test]
 fn pipeline_results_have_features_and_entities() {
     // Crypt
@@ -417,7 +421,8 @@ fn pipeline_results_have_features_and_entities() {
         );
     }
 
-    // Tavern
+    // Tavern — structural features may be empty for some seeds now that
+    // cosmetic barrel/torch rules live in the atmosphere system.
     for seed in 0..20u64 {
         let config = PipelineConfig {
             seed: Some(seed),
@@ -427,10 +432,7 @@ fn pipeline_results_have_features_and_entities() {
         let r = pipeline
             .run(&tavern_situation())
             .expect("tavern pipeline should succeed");
-        assert!(
-            !r.features.features.is_empty(),
-            "tavern seed {seed}: should have features"
-        );
+        // Features are allowed to be empty — atmosphere profiles add them later.
         assert!(
             !r.entities.entities.is_empty(),
             "tavern seed {seed}: should have entities"
@@ -453,11 +455,11 @@ fn pipeline_crypt_determinism() {
             config: config.clone(),
         };
         let r1 = pipeline1.run(&situation).unwrap();
-        let ascii1 = render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
+        let ascii1 = render_ascii_default(&r1.tiles, &r1.features, &r1.entities);
 
         let pipeline2 = Pipeline { config };
         let r2 = pipeline2.run(&situation).unwrap();
-        let ascii2 = render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+        let ascii2 = render_ascii_default(&r2.tiles, &r2.features, &r2.entities);
 
         assert_eq!(
             ascii1, ascii2,
@@ -481,11 +483,11 @@ fn pipeline_tavern_determinism() {
             config: config.clone(),
         };
         let r1 = pipeline1.run(&situation).unwrap();
-        let ascii1 = render_ascii_with_entities(&r1.tiles, &r1.features, &r1.entities);
+        let ascii1 = render_ascii_default(&r1.tiles, &r1.features, &r1.entities);
 
         let pipeline2 = Pipeline { config };
         let r2 = pipeline2.run(&situation).unwrap();
-        let ascii2 = render_ascii_with_entities(&r2.tiles, &r2.features, &r2.entities);
+        let ascii2 = render_ascii_default(&r2.tiles, &r2.features, &r2.entities);
 
         assert_eq!(
             ascii1, ascii2,
@@ -506,7 +508,7 @@ fn pipeline_different_seeds_produce_variety() {
         };
         let pipeline = Pipeline { config };
         let r = pipeline.run(&crypt_situation()).unwrap();
-        let ascii = render_ascii_with_entities(&r.tiles, &r.features, &r.entities);
+        let ascii = render_ascii_default(&r.tiles, &r.features, &r.entities);
         crypt_outputs.insert(ascii);
     }
     assert!(
@@ -523,7 +525,7 @@ fn pipeline_different_seeds_produce_variety() {
         };
         let pipeline = Pipeline { config };
         let r = pipeline.run(&tavern_situation()).unwrap();
-        let ascii = render_ascii_with_entities(&r.tiles, &r.features, &r.entities);
+        let ascii = render_ascii_default(&r.tiles, &r.features, &r.entities);
         tavern_outputs.insert(ascii);
     }
     assert!(

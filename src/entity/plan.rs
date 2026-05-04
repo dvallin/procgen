@@ -37,6 +37,9 @@ impl std::fmt::Display for EntityArchetypeId {
 pub struct EntityPlacement {
     /// What kind of entity this is.
     pub archetype: EntityArchetypeId,
+    /// Optional unique name for this entity (e.g. "Skrag the Rat King").
+    /// Only set for pinned/named entities from situation directives.
+    pub name: Option<String>,
     /// The tile this entity occupies.
     pub position: Point,
     /// Which room this entity belongs to.
@@ -128,6 +131,7 @@ mod tests {
             entities: vec![
                 EntityPlacement {
                     archetype: EntityArchetypeId::from("skeleton"),
+                    name: None,
                     position: Point { x: 3, y: 3 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![Tag::from("patrols")],
@@ -139,6 +143,7 @@ mod tests {
                 },
                 EntityPlacement {
                     archetype: EntityArchetypeId::from("rat"),
+                    name: None,
                     position: Point { x: 7, y: 7 },
                     space_id: SpaceId(1),
                     behavior_tags: vec![],
@@ -146,6 +151,7 @@ mod tests {
                 },
                 EntityPlacement {
                     archetype: EntityArchetypeId::from("skeleton_guardian"),
+                    name: None,
                     position: Point { x: 4, y: 4 },
                     space_id: SpaceId(0),
                     behavior_tags: vec![Tag::from("stationary")],

@@ -236,7 +236,7 @@
     "id": "natural_cave",
     "name": "Natural Cave",
     "description": "A sprawling natural cave system with underground pools, collapsed passages, and bioluminescent fungi.",
-    "location_kind": "Dungeon",
+    "location_kind": "Cave",
     "motifs": ["stone", "damp", "natural"],
     "roles": [
       {
@@ -340,6 +340,96 @@
           {
             "label": "Underground Stream",
             "tags": ["flooded", "damp"],
+            "archetype": "Corridor"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "vermin_cellar",
+    "name": "Vermin-Infested Port Cellar",
+    "description": "A dockside tavern cellar overrun by rats. Extends urban_underground with infested entries.",
+    "base": "urban_underground",
+    "location_kind": "Building",
+    "motifs": ["vermin", "damp", "timber"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "Kitchen Stairs",
+            "tags": ["food", "cramped"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Main Cellar",
+            "tags": ["barrels", "damp", "infested"],
+            "archetype": "Hall"
+          },
+          {
+            "label": "Ale Storage",
+            "tags": ["barrels", "storage", "infested"],
+            "archetype": "Hall"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Gnawed Door",
+            "tags": ["infested", "locked"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Rat King's Den",
+            "tags": ["main_goal", "infested", "nest"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Breeding Warren",
+            "tags": ["main_goal", "infested", "nest"],
+            "archetype": "Vault"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Pantry",
+            "tags": ["optional", "food", "infested"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Grain Store",
+            "tags": ["optional", "food", "infested", "storage"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Drain Tunnel",
+            "tags": ["optional", "damp", "infested"],
+            "archetype": "Corridor"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Gnawed Passage",
+            "tags": ["narrow", "infested"],
             "archetype": "Corridor"
           }
         ]

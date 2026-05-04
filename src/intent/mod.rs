@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod compose;
 pub mod constraints;
 pub mod filler;
 pub mod generic_builder;

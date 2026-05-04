@@ -6,7 +6,12 @@
     "slots": [
       { "key": "entry", "role": "Entry", "optional": false },
       { "key": "hub", "role": "Hub", "optional": false },
-      { "key": "key_area", "role": "Goal", "optional": true },
+      {
+        "key": "key_area",
+        "role": "Goal",
+        "optional": true,
+        "expandable": true
+      },
       { "key": "gate", "role": "Gate", "optional": false },
       { "key": "goal", "role": "Goal", "optional": false },
       { "key": "reward", "role": "Reward", "optional": true }
@@ -22,6 +27,10 @@
       { "tag": "locked_vault", "weight": 3 },
       { "tag": "sealed_crypt", "weight": 2 },
       { "tag": "guarded", "weight": 1 }
+    ],
+    "expansion_votes": [
+      { "parent_role": "Goal", "weight": 1 },
+      { "parent_role": "Branch", "weight": 1 }
     ]
   },
   {
@@ -31,7 +40,12 @@
     "slots": [
       { "key": "entry", "role": "Entry", "optional": false },
       { "key": "hub", "role": "Hub", "optional": false },
-      { "key": "spoke_1", "role": "Goal", "optional": false },
+      {
+        "key": "spoke_1",
+        "role": "Goal",
+        "optional": false,
+        "expandable": true
+      },
       { "key": "spoke_2", "role": "Branch", "optional": true },
       { "key": "spoke_3", "role": "Branch", "optional": true },
       { "key": "hidden", "role": "Reward", "optional": true }
@@ -75,6 +89,10 @@
       { "tag": "mine", "weight": 2 },
       { "tag": "tunnel", "weight": 2 },
       { "tag": "corridor", "weight": 1 }
+    ],
+    "expansion_votes": [
+      { "parent_role": "Branch", "weight": 2 },
+      { "parent_role": "Transition", "weight": 1 }
     ]
   },
   {
@@ -103,6 +121,10 @@
       { "tag": "trapped", "weight": 3 },
       { "tag": "trial", "weight": 2 },
       { "tag": "arena", "weight": 1 }
+    ],
+    "expansion_votes": [
+      { "parent_role": "Gate", "weight": 2 },
+      { "parent_role": "Goal", "weight": 1 }
     ]
   },
   {
@@ -112,8 +134,18 @@
     "slots": [
       { "key": "entry", "role": "Entry", "optional": false },
       { "key": "hub", "role": "Hub", "optional": false },
-      { "key": "branch_a", "role": "Branch", "optional": false },
-      { "key": "branch_b", "role": "Branch", "optional": false },
+      {
+        "key": "branch_a",
+        "role": "Branch",
+        "optional": false,
+        "expandable": true
+      },
+      {
+        "key": "branch_b",
+        "role": "Branch",
+        "optional": false,
+        "expandable": true
+      },
       { "key": "branch_a_end", "role": "Goal", "optional": false },
       { "key": "branch_b_end", "role": "Reward", "optional": true },
       { "key": "shortcut", "role": "Transition", "optional": true }

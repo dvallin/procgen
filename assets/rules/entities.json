@@ -4,39 +4,20 @@
     "placement": "Center",
     "min_count": 1,
     "max_count": 2,
-    "behavior_tags": [
-      "patrols",
-      "aggressive"
-    ],
+    "behavior_tags": ["patrols", "aggressive"],
     "patrol": true,
     "role_match": "Goal",
     "archetype_match": null,
     "tag_match": "main_goal"
   },
   {
-    "archetype": "skeleton",
-    "placement": "RandomFloor",
-    "min_count": 1,
-    "max_count": 3,
-    "behavior_tags": [
-      "patrols"
-    ],
-    "patrol": true,
-    "role_match": "Hub",
-    "archetype_match": null,
-    "tag_match": null
-  },
-  {
     "archetype": "chest_mimic",
     "placement": {
-      "NearFeature": "Chest"
+      "NearFeature": "chest"
     },
     "min_count": 0,
     "max_count": 1,
-    "behavior_tags": [
-      "stationary",
-      "disguised"
-    ],
+    "behavior_tags": ["stationary", "disguised"],
     "patrol": false,
     "role_match": "Reward",
     "archetype_match": null,
@@ -47,50 +28,18 @@
     "placement": "Center",
     "min_count": 1,
     "max_count": 1,
-    "behavior_tags": [
-      "stationary",
-      "aggressive"
-    ],
+    "behavior_tags": ["stationary", "aggressive"],
     "patrol": false,
     "role_match": "Gate",
     "archetype_match": null,
     "tag_match": "locked"
   },
   {
-    "archetype": "rat",
-    "placement": "RandomFloor",
-    "min_count": 0,
-    "max_count": 2,
-    "behavior_tags": [
-      "patrols"
-    ],
-    "patrol": true,
-    "role_match": null,
-    "archetype_match": null,
-    "tag_match": "barrels"
-  },
-  {
-    "archetype": "rat",
-    "placement": "RandomFloor",
-    "min_count": 0,
-    "max_count": 1,
-    "behavior_tags": [
-      "patrols"
-    ],
-    "patrol": true,
-    "role_match": null,
-    "archetype_match": null,
-    "tag_match": "food"
-  },
-  {
     "archetype": "smuggler",
     "placement": "RandomFloor",
     "min_count": 1,
     "max_count": 1,
-    "behavior_tags": [
-      "stationary",
-      "dialogue"
-    ],
+    "behavior_tags": ["stationary", "dialogue"],
     "patrol": false,
     "role_match": null,
     "archetype_match": null,
