@@ -263,6 +263,11 @@ fn graft_subgraph(
         id_map.insert(node.id, new_id);
         node.id = new_id;
         node.key = format!("{}.{}", slot_key, node.key);
+        // Sub-pattern Entry nodes become Transition in the parent graph —
+        // they’re passages into the sub-area, not dungeon entrances.
+        if node.role == NodeRole::Entry {
+            node.role = NodeRole::Transition;
+        }
         *next_id += 1;
         parent_nodes.push(node);
     }
@@ -333,11 +338,12 @@ fn find_node_id(nodes: &[ScenarioNode], slot_key: &str) -> Option<ScenarioNodeId
         return Some(node.id);
     }
 
-    // Fallback: find ANY node with the slot_key prefix that has Entry role.
+    // Fallback: find ANY node with the slot_key prefix that was originally
+    // an Entry (now converted to Transition during grafting).
     let prefix = format!("{}.", slot_key);
     nodes
         .iter()
-        .find(|n| n.key.starts_with(&prefix) && n.role == NodeRole::Entry)
+        .find(|n| n.key.starts_with(&prefix) && n.role == NodeRole::Transition)
         .map(|n| n.id)
 }
 

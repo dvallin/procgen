@@ -3,7 +3,8 @@
 //! Produces one [`InteriorPlan`] per room by:
 //! 1. Detecting doors on the room boundary.
 //! 2. Computing reserved door-to-door paths via BFS.
-//! 3. Classifying interior cells into zones.
+//! 3. Reserving corridor cells that pass through the room interior.
+//! 4. Classifying interior cells into zones.
 
 use std::collections::HashMap;
 
@@ -13,7 +14,7 @@ use crate::geometry::geom::GeometryPlan;
 use crate::spatial::plan::SpaceId;
 use crate::tile::map::TileMap;
 
-use super::paths::{compute_reserved_paths, find_room_doors};
+use super::paths::{compute_corridor_passthrough, compute_reserved_paths, find_room_doors};
 use super::plan::InteriorPlan;
 use super::zones::classify_zones;
 
@@ -32,10 +33,23 @@ pub fn build_interior_plans(geometry: &GeometryPlan, tiles: &TileMap) -> Vec<Int
         // Step 1: find doors on this room's boundary.
         let doors = find_room_doors(tiles, rect);
 
-        // Step 2: compute reserved paths.
-        let (path_intents, reserved_paths) = compute_reserved_paths(tiles, rect, &doors);
+        // Step 2: compute reserved paths between doors.
+        let (path_intents, mut reserved_paths) = compute_reserved_paths(tiles, rect, &doors);
 
-        // Step 3: classify zones.
+        // Step 3: reserve corridor cells that pass through this room's interior.
+        // Corridors routed through a room (not entering via a door) must stay clear
+        // to maintain global connectivity.
+        let corridor_passthrough = compute_corridor_passthrough(rect, &geometry.links, &doors);
+        if !corridor_passthrough.is_empty() {
+            debug!(
+                space_id = placed.space_id.0,
+                corridor_reserved = corridor_passthrough.len(),
+                "reserving corridor pass-through cells"
+            );
+            reserved_paths.extend(corridor_passthrough);
+        }
+
+        // Step 4: classify zones.
         let zones = classify_zones(tiles, rect, &reserved_paths);
 
         debug!(

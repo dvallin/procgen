@@ -3,6 +3,7 @@
 pub mod entity;
 pub mod feature;
 pub mod geometry;
+pub mod pacing;
 
 /// Generic validator trait. Implementations check a generated artifact for issues.
 pub trait Validator<T> {

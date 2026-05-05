@@ -3,10 +3,13 @@ use clap::{Parser, ValueEnum};
 use procgen::demo::cave::build_cave_situation;
 use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
+use procgen::demo::mine::build_mine_situation;
 use procgen::demo::tavern::build_tavern_situation;
+use procgen::entity::registry::EntityRegistry;
 use procgen::feature::registry::FeatureRegistry;
 use procgen::pipeline::{GeometryStrategy, Pipeline, PipelineConfig};
 use procgen::tile::ascii::{render_ascii, render_ascii_annotated};
+use procgen::tile::color::{render_ascii_annotated_colored, render_ascii_colored};
 use procgen::tile::registry::TileRegistry;
 use tracing_subscriber::EnvFilter;
 
@@ -33,6 +36,10 @@ struct Cli {
     /// Geometry layout strategy.
     #[arg(long, default_value = "force")]
     layout: Layout,
+
+    /// Enable colored output (ANSI). Default: auto-detect terminal.
+    #[arg(long, default_value = "auto")]
+    color: ColorMode,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -41,6 +48,7 @@ enum Scenario {
     Tavern,
     Cave,
     Cellar,
+    Mine,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -56,6 +64,16 @@ enum Layout {
     Column,
     /// Force-directed simulation (better for larger maps).
     Force,
+}
+
+#[derive(Clone, ValueEnum)]
+enum ColorMode {
+    /// Auto-detect: color if stdout is a terminal.
+    Auto,
+    /// Always use color.
+    On,
+    /// Never use color.
+    Off,
 }
 
 fn main() {
@@ -108,22 +126,64 @@ fn main() {
             println!("=== Rat-Infested Port Cellar ===\n");
             pipeline.run(&situation)
         }
+        Scenario::Mine => {
+            let situation = build_mine_situation();
+            println!("=== Abandoned Mine ===\n");
+            pipeline.run(&situation)
+        }
     };
 
     match result {
         Ok(r) => {
+            println!("(seed: {})\n", r.seed);
             let tile_registry = TileRegistry::default_registry();
             let feature_registry = FeatureRegistry::default_registry();
+            let entity_registry = EntityRegistry::default_registry();
+
+            let use_color = match cli.color {
+                ColorMode::On => true,
+                ColorMode::Off => false,
+                ColorMode::Auto => std::io::IsTerminal::is_terminal(&std::io::stdout()),
+            };
+
             if cli.annotate {
+                if use_color {
+                    println!(
+                        "{}",
+                        render_ascii_annotated_colored(
+                            &r.tiles,
+                            &r.features,
+                            &r.entities,
+                            &tile_registry,
+                            &feature_registry,
+                            &entity_registry,
+                            &r.annotations,
+                        )
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        render_ascii_annotated(
+                            &r.tiles,
+                            &r.features,
+                            &r.entities,
+                            &tile_registry,
+                            &feature_registry,
+                            &entity_registry,
+                            &r.annotations,
+                        )
+                    );
+                }
+            } else if use_color {
                 println!(
                     "{}",
-                    render_ascii_annotated(
+                    render_ascii_colored(
                         &r.tiles,
                         &r.features,
                         &r.entities,
                         &tile_registry,
                         &feature_registry,
-                        &r.annotations,
+                        &entity_registry,
                     )
                 );
             } else {
@@ -135,8 +195,17 @@ fn main() {
                         &r.entities,
                         &tile_registry,
                         &feature_registry,
+                        &entity_registry,
                     )
                 );
+            }
+
+            // Print pacing warnings if any.
+            if !r.pacing_warnings.is_empty() {
+                println!();
+                for w in &r.pacing_warnings {
+                    println!("\u{26a0} {}", w);
+                }
             }
         }
         Err(e) => {

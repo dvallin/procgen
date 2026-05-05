@@ -435,5 +435,124 @@
         ]
       }
     ]
+  },
+  {
+    "id": "abandoned_mine",
+    "name": "Abandoned Mine",
+    "description": "A long-abandoned mine whose tunnels have collapsed in places. Undead miners still wander the shafts, and cave creatures have moved into the deeper galleries.",
+    "location_kind": "Cave",
+    "motifs": ["stone", "industrial", "decay"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "Mine Entrance",
+            "tags": ["mine", "overgrown"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Collapsed Adit",
+            "tags": ["mine", "collapsed"],
+            "archetype": "Corridor"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Junction Chamber",
+            "tags": ["mine", "gallery", "excavated"],
+            "archetype": "Hall"
+          },
+          {
+            "label": "Cart Depot",
+            "tags": ["mine", "shaft", "industrial"],
+            "archetype": "Hall"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Collapsed Passage",
+            "tags": ["mine", "collapsed", "locked", "dangerous"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Flooded Shaft",
+            "tags": ["mine", "flooded", "locked"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Deep Ore Vein",
+            "tags": ["mine", "main_goal", "gallery", "valuable"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Foreman's Office",
+            "tags": ["mine", "main_goal", "industrial"],
+            "archetype": "Workshop"
+          }
+        ]
+      },
+      {
+        "role": "Reward",
+        "entries": [
+          {
+            "label": "Hidden Gem Cache",
+            "tags": ["mine", "valuable", "secret"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Tool Storeroom",
+            "tags": ["mine", "industrial", "storage"],
+            "archetype": "Vault"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Side Gallery",
+            "tags": ["mine", "gallery", "excavated"],
+            "archetype": "Chamber"
+          },
+          {
+            "label": "Ventilation Shaft",
+            "tags": ["mine", "shaft", "narrow"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Abandoned Excavation",
+            "tags": ["mine", "collapsed", "dangerous"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Descending Shaft",
+            "tags": ["mine", "shaft", "dark"],
+            "archetype": "Corridor"
+          },
+          {
+            "label": "Timber-Braced Tunnel",
+            "tags": ["mine", "tunnel", "narrow"],
+            "archetype": "Corridor"
+          }
+        ]
+      }
+    ]
   }
 ]

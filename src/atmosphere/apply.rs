@@ -226,6 +226,7 @@ fn sample_entities(
                     role_match: None,
                     archetype_match: None,
                     tag_match: None,
+                    tension_min: None,
                 });
             }
         }

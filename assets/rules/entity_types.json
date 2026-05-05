@@ -1,0 +1,93 @@
+[
+  {
+    "name": "rat",
+    "category": "Creature",
+    "ascii_char": "r",
+    "blocking": false,
+    "tags": ["vermin"]
+  },
+  {
+    "name": "tavern_rat",
+    "category": "Creature",
+    "ascii_char": "r",
+    "blocking": false,
+    "tags": ["vermin"]
+  },
+  {
+    "name": "giant_rat",
+    "category": "Boss",
+    "ascii_char": "R",
+    "blocking": false,
+    "tags": ["vermin", "boss"]
+  },
+  {
+    "name": "skeleton",
+    "category": "Creature",
+    "ascii_char": "s",
+    "blocking": false,
+    "tags": ["undead"]
+  },
+  {
+    "name": "skeleton_guardian",
+    "category": "Creature",
+    "ascii_char": "G",
+    "blocking": false,
+    "tags": ["undead", "elite"]
+  },
+  {
+    "name": "gate_guardian",
+    "category": "Creature",
+    "ascii_char": "G",
+    "blocking": false,
+    "tags": ["guardian", "elite"]
+  },
+  {
+    "name": "chest_mimic",
+    "category": "Hazard",
+    "ascii_char": "M",
+    "blocking": false,
+    "tags": ["disguised", "trap"]
+  },
+  {
+    "name": "smuggler",
+    "category": "NPC",
+    "ascii_char": "@",
+    "blocking": false,
+    "tags": ["dialogue", "human"]
+  },
+  {
+    "name": "bat",
+    "category": "Creature",
+    "ascii_char": "b",
+    "blocking": false,
+    "tags": ["flying", "natural"]
+  },
+  {
+    "name": "cave_spider",
+    "category": "Creature",
+    "ascii_char": "x",
+    "blocking": false,
+    "tags": ["natural", "venomous"]
+  },
+  {
+    "name": "trap_mimic",
+    "category": "Hazard",
+    "ascii_char": "M",
+    "blocking": false,
+    "tags": ["disguised", "trap"]
+  },
+  {
+    "name": "undead_miner",
+    "category": "Creature",
+    "ascii_char": "m",
+    "blocking": false,
+    "tags": ["undead", "mine"]
+  },
+  {
+    "name": "mine_foreman",
+    "category": "Boss",
+    "ascii_char": "F",
+    "blocking": false,
+    "tags": ["undead", "mine", "boss"]
+  }
+]

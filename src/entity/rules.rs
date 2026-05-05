@@ -10,6 +10,7 @@ use crate::feature::registry::FeatureType;
 use crate::intent::graph::NodeRole;
 use crate::spatial::plan::{SpaceArchetype, SpaceSpec};
 use crate::tag::Tag;
+use crate::tension::TensionLevel;
 
 /// How an entity should be positioned inside a room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,10 @@ pub struct EntityRule {
     pub archetype_match: Option<SpaceArchetype>,
     /// If set, the space must carry this tag to match.
     pub tag_match: Option<Tag>,
+    /// If set, the room must have at least this tension level for the rule to fire.
+    /// Rules without this field always match (regardless of tension).
+    #[serde(default)]
+    pub tension_min: Option<TensionLevel>,
 }
 
 impl EntityRule {
@@ -70,6 +75,15 @@ impl EntityRule {
         }
         true
     }
+
+    /// Does this rule's tension requirement allow it to fire at the given level?
+    /// Returns `true` if `tension_min` is `None` or the room's tension is ≥ the minimum.
+    pub fn tension_allows(&self, room_tension: TensionLevel) -> bool {
+        match self.tension_min {
+            None => true,
+            Some(min) => room_tension >= min,
+        }
+    }
 }
 
 /// Default entity rules for the MVP scenarios (crypt + tavern).
@@ -83,8 +97,19 @@ pub fn default_entity_rules() -> Vec<EntityRule> {
 }
 
 /// Returns only the rules that match a given space.
-pub fn matching_entity_rules<'a>(rules: &'a [EntityRule], spec: &SpaceSpec) -> Vec<&'a EntityRule> {
-    rules.iter().filter(|r| r.matches(spec)).collect()
+pub fn matching_entity_rules<'a>(
+    rules: &'a [EntityRule],
+    spec: &SpaceSpec,
+    tension: Option<TensionLevel>,
+) -> Vec<&'a EntityRule> {
+    rules
+        .iter()
+        .filter(|r| r.matches(spec))
+        .filter(|r| match tension {
+            Some(t) => r.tension_allows(t),
+            None => true,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -120,7 +145,7 @@ mod tests {
     fn goal_main_goal_gets_skeleton_guardians() {
         let spec = make_spec(NodeRole::Goal, Some(SpaceArchetype::Vault), &["main_goal"]);
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
@@ -148,7 +173,7 @@ mod tests {
             &["noble", "sealed"],
         );
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         assert!(
             matched.is_empty(),
@@ -165,7 +190,7 @@ mod tests {
             &["barrels", "damp"],
         );
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         assert!(
             matched.is_empty(),
@@ -182,7 +207,7 @@ mod tests {
             &["noble", "sealed"],
         );
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         assert!(
             matched.is_empty(),
@@ -199,7 +224,7 @@ mod tests {
             &["secret", "smuggling"],
         );
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         let archetypes: Vec<&EntityArchetypeId> = matched.iter().map(|r| &r.archetype).collect();
         assert!(
@@ -219,7 +244,7 @@ mod tests {
     fn gate_without_locked_tag_gets_no_entities() {
         let spec = make_spec(NodeRole::Gate, Some(SpaceArchetype::Vestibule), &["hidden"]);
         let rules = default_entity_rules();
-        let matched = matching_entity_rules(&rules, &spec);
+        let matched = matching_entity_rules(&rules, &spec, None);
 
         assert!(
             matched.is_empty(),
@@ -282,6 +307,7 @@ mod tests {
             role_match: None,
             archetype_match: Some(SpaceArchetype::Chamber),
             tag_match: Some(Tag::from("trapped")),
+            tension_min: None,
         };
         let json = serde_json::to_string(&rule).unwrap();
         let deser: EntityRule = serde_json::from_str(&json).unwrap();
@@ -291,5 +317,123 @@ mod tests {
         );
         assert_eq!(deser.archetype_match, Some(SpaceArchetype::Chamber));
         assert_eq!(deser.tag_match, Some(Tag::from("trapped")));
+    }
+
+    #[test]
+    fn tension_min_filters_low_tension_rooms() {
+        let rule = EntityRule {
+            archetype: EntityArchetypeId::from("skeleton"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            min_count: 0,
+            max_count: 2,
+            behavior_tags: vec![],
+            patrol: false,
+            role_match: None,
+            archetype_match: None,
+            tag_match: None,
+            tension_min: Some(TensionLevel::Medium),
+        };
+
+        // Low tension — should NOT match
+        assert!(!rule.tension_allows(TensionLevel::Low));
+        // Medium tension — should match (equal to min)
+        assert!(rule.tension_allows(TensionLevel::Medium));
+        // High tension — should match (above min)
+        assert!(rule.tension_allows(TensionLevel::High));
+    }
+
+    #[test]
+    fn tension_min_none_always_matches() {
+        let rule = EntityRule {
+            archetype: EntityArchetypeId::from("rat"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            min_count: 0,
+            max_count: 1,
+            behavior_tags: vec![],
+            patrol: false,
+            role_match: None,
+            archetype_match: None,
+            tag_match: None,
+            tension_min: None,
+        };
+
+        assert!(rule.tension_allows(TensionLevel::Low));
+        assert!(rule.tension_allows(TensionLevel::Climax));
+    }
+
+    #[test]
+    fn matching_entity_rules_filters_by_tension() {
+        let rules = vec![
+            EntityRule {
+                archetype: EntityArchetypeId::from("rat"),
+                placement: EntityPlacementStrategy::RandomFloor,
+                min_count: 0,
+                max_count: 1,
+                behavior_tags: vec![],
+                patrol: false,
+                role_match: None,
+                archetype_match: None,
+                tag_match: None,
+                tension_min: None, // always matches
+            },
+            EntityRule {
+                archetype: EntityArchetypeId::from("skeleton"),
+                placement: EntityPlacementStrategy::RandomFloor,
+                min_count: 0,
+                max_count: 2,
+                behavior_tags: vec![],
+                patrol: false,
+                role_match: None,
+                archetype_match: None,
+                tag_match: None,
+                tension_min: Some(TensionLevel::High), // only High+
+            },
+        ];
+
+        let spec = make_spec(NodeRole::Hub, Some(SpaceArchetype::Hall), &[]);
+
+        // At Low tension — only rat matches
+        let matched = matching_entity_rules(&rules, &spec, Some(TensionLevel::Low));
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].archetype, EntityArchetypeId::from("rat"));
+
+        // At High tension — both match
+        let matched = matching_entity_rules(&rules, &spec, Some(TensionLevel::High));
+        assert_eq!(matched.len(), 2);
+    }
+
+    #[test]
+    fn serde_tension_min_deserializes() {
+        let json = r#"{
+            "archetype": "skeleton",
+            "placement": "RandomFloor",
+            "min_count": 0,
+            "max_count": 2,
+            "behavior_tags": [],
+            "patrol": false,
+            "role_match": null,
+            "archetype_match": null,
+            "tag_match": null,
+            "tension_min": "High"
+        }"#;
+        let rule: EntityRule = serde_json::from_str(json).unwrap();
+        assert_eq!(rule.tension_min, Some(TensionLevel::High));
+    }
+
+    #[test]
+    fn serde_tension_min_absent_deserializes_to_none() {
+        let json = r#"{
+            "archetype": "rat",
+            "placement": "RandomFloor",
+            "min_count": 0,
+            "max_count": 1,
+            "behavior_tags": [],
+            "patrol": false,
+            "role_match": null,
+            "archetype_match": null,
+            "tag_match": null
+        }"#;
+        let rule: EntityRule = serde_json::from_str(json).unwrap();
+        assert_eq!(rule.tension_min, None);
     }
 }

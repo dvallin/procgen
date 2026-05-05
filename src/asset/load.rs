@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
 use crate::atmosphere::profile::AtmosphereProfile;
+use crate::entity::registry::{EntityProperties, EntityRegistry};
 use crate::entity::rules::EntityRule;
 use crate::feature::registry::{FeatureProperties, FeatureRegistry};
 use crate::feature::rules::FeatureRule;
@@ -44,6 +45,9 @@ const EMBEDDED_ATMOSPHERE_PROFILES: &str = include_str!("../../assets/rules/atmo
 /// Default interior templates, embedded at compile time.
 const EMBEDDED_INTERIOR_TEMPLATES: &str =
     include_str!("../../assets/rules/interior_templates.json");
+
+/// Default entity type registry, embedded at compile time.
+const EMBEDDED_ENTITY_REGISTRY: &str = include_str!("../../assets/rules/entity_types.json");
 
 // ─── Error type ─────────────────────────────────────────────────────────────
 
@@ -263,6 +267,20 @@ pub fn load_default_interior_templates() -> Result<Vec<InteriorTemplate>, AssetL
     load_rules_with_fallback(DEFAULT_INTERIOR_TEMPLATES_PATH, EMBEDDED_INTERIOR_TEMPLATES)
 }
 
+/// Default file path for the entity type registry, relative to the working directory.
+pub const DEFAULT_ENTITY_REGISTRY_PATH: &str = "assets/rules/entity_types.json";
+
+/// Load the default entity registry.
+///
+/// Tries `assets/rules/entity_types.json` on disk first, falls back to the
+/// compiled-in version if the file doesn't exist. Builds an [`EntityRegistry`]
+/// from the loaded entity properties.
+pub fn load_default_entity_registry() -> Result<EntityRegistry, AssetLoadError> {
+    let props: Vec<EntityProperties> =
+        load_rules_with_fallback(DEFAULT_ENTITY_REGISTRY_PATH, EMBEDDED_ENTITY_REGISTRY)?;
+    Ok(EntityRegistry::from_properties(props))
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -277,7 +295,7 @@ mod tests {
     #[test]
     fn load_embedded_feature_rules_succeeds() {
         let rules = load_default_feature_rules().unwrap();
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 6);
 
         // Spot-check a known rule.
         let sarcophagus = rules
@@ -293,7 +311,7 @@ mod tests {
     #[test]
     fn load_embedded_entity_rules_succeeds() {
         let rules = load_default_entity_rules().unwrap();
-        assert_eq!(rules.len(), 4);
+        assert_eq!(rules.len(), 11);
 
         // Spot-check a known rule.
         let guardian = rules
@@ -348,7 +366,7 @@ mod tests {
         // load_rules_with_fallback should use it rather than the fallback.
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("assets/rules/features.json", "[]").unwrap();
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 6);
     }
 
     #[test]
@@ -356,7 +374,7 @@ mod tests {
         let rules: Vec<FeatureRule> =
             load_rules_with_fallback("nonexistent/path/features.json", EMBEDDED_FEATURE_RULES)
                 .unwrap();
-        assert_eq!(rules.len(), 5);
+        assert_eq!(rules.len(), 6);
     }
 
     #[test]
@@ -470,7 +488,7 @@ mod tests {
     #[test]
     fn load_embedded_vocabularies_succeeds() {
         let vocabs = load_default_vocabularies().unwrap();
-        assert_eq!(vocabs.len(), 4);
+        assert_eq!(vocabs.len(), 5);
 
         let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"undead_nobility"));
@@ -582,5 +600,20 @@ mod tests {
                 id
             );
         }
+    }
+
+    #[test]
+    fn load_embedded_entity_registry_succeeds() {
+        let registry = load_default_entity_registry().unwrap();
+        assert!(
+            registry.len() >= 11,
+            "expected at least 11 entity types, got {}",
+            registry.len()
+        );
+        // Verify a known entry
+        use crate::entity::plan::EntityArchetypeId;
+        let rat = registry.get(&EntityArchetypeId::from("rat"));
+        assert!(rat.is_some(), "should find 'rat' in entity registry");
+        assert_eq!(rat.unwrap().ascii_char, 'r');
     }
 }

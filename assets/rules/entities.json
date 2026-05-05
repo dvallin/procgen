@@ -11,6 +11,30 @@
     "tag_match": "main_goal"
   },
   {
+    "archetype": "skeleton",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 2,
+    "behavior_tags": ["patrols"],
+    "patrol": true,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "undead",
+    "tension_min": "Medium"
+  },
+  {
+    "archetype": "skeleton",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 1,
+    "behavior_tags": ["patrols", "aggressive"],
+    "patrol": true,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "undead",
+    "tension_min": "High"
+  },
+  {
     "archetype": "chest_mimic",
     "placement": {
       "NearFeature": "chest"
@@ -21,7 +45,8 @@
     "patrol": false,
     "role_match": "Reward",
     "archetype_match": null,
-    "tag_match": null
+    "tag_match": null,
+    "tension_min": "Medium"
   },
   {
     "archetype": "gate_guardian",
@@ -35,6 +60,30 @@
     "tag_match": "locked"
   },
   {
+    "archetype": "cave_spider",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 2,
+    "behavior_tags": ["aggressive"],
+    "patrol": false,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "natural",
+    "tension_min": "High"
+  },
+  {
+    "archetype": "bat",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 2,
+    "behavior_tags": ["patrols"],
+    "patrol": true,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "natural",
+    "tension_min": "Medium"
+  },
+  {
     "archetype": "smuggler",
     "placement": "RandomFloor",
     "min_count": 1,
@@ -44,5 +93,40 @@
     "role_match": null,
     "archetype_match": null,
     "tag_match": "smuggling"
+  },
+  {
+    "archetype": "undead_miner",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 2,
+    "behavior_tags": ["patrols"],
+    "patrol": true,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "mine",
+    "tension_min": "Medium"
+  },
+  {
+    "archetype": "undead_miner",
+    "placement": "RandomFloor",
+    "min_count": 0,
+    "max_count": 2,
+    "behavior_tags": ["patrols", "aggressive"],
+    "patrol": true,
+    "role_match": null,
+    "archetype_match": null,
+    "tag_match": "mine",
+    "tension_min": "High"
+  },
+  {
+    "archetype": "mine_foreman",
+    "placement": "Center",
+    "min_count": 1,
+    "max_count": 1,
+    "behavior_tags": ["stationary", "aggressive"],
+    "patrol": false,
+    "role_match": "Goal",
+    "archetype_match": null,
+    "tag_match": "mine"
   }
 ]

@@ -155,6 +155,7 @@ pub const STRUCTURAL_TAG_NAMES: &[&str] = &[
     "contains_key",
     "secret",
     "hidden",
+    "rest_point",
 ];
 
 /// Classify a list of raw tags into (structural, atmosphere) buckets.

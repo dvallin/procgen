@@ -301,7 +301,7 @@ fn route_links(spatial: &SpatialPlan, placed: &[PlacedSpace]) -> Vec<PlacedLink>
     for (li, link) in spatial.links.iter().enumerate() {
         let start = exit_points[li];
         let end = entry_points[li];
-        let (_, _, ff) = link_data[li];
+        let (fi, ti, ff) = link_data[li];
         let ef = entry_faces[li];
 
         let exit_vertical = matches!(ff, Face::North | Face::South);
@@ -309,10 +309,20 @@ fn route_links(spatial: &SpatialPlan, placed: &[PlacedSpace]) -> Vec<PlacedLink>
 
         let points = if start.x == end.x || start.y == end.y {
             // Straight corridor — already aligned.
-            vec![start, end]
+            // Check if it passes through any room (excluding endpoints).
+            let blocked = segment_intersects_room(start, end, placed, fi, ti);
+            if blocked {
+                // Deviate perpendicular to the straight line to route around.
+                // A vertical straight needs H→V→H; a horizontal one needs V→H→V.
+                route_z_shape(start, end, !exit_vertical, placed)
+            } else {
+                vec![start, end]
+            }
         } else if exit_vertical != entry_vertical {
-            // Perpendicular faces → L-shape (one bend).
-            let bend = if exit_vertical {
+            // Perpendicular faces → try L-shape (one bend).
+            // Try both possible L-shape orientations, prefer the one without
+            // room intersections. Fall back to Z-shape if both are blocked.
+            let bend_a = if exit_vertical {
                 Point {
                     x: start.x,
                     y: end.y,
@@ -323,7 +333,38 @@ fn route_links(spatial: &SpatialPlan, placed: &[PlacedSpace]) -> Vec<PlacedLink>
                     y: start.y,
                 }
             };
-            vec![start, bend, end]
+
+            let seg_a1_blocked = segment_intersects_room(start, bend_a, placed, fi, ti);
+            let seg_a2_blocked = segment_intersects_room(bend_a, end, placed, fi, ti);
+
+            if !seg_a1_blocked && !seg_a2_blocked {
+                // Primary L-shape is clear.
+                vec![start, bend_a, end]
+            } else {
+                // Try alternate L-shape (bend the other way).
+                let bend_b = if exit_vertical {
+                    Point {
+                        x: end.x,
+                        y: start.y,
+                    }
+                } else {
+                    Point {
+                        x: start.x,
+                        y: end.y,
+                    }
+                };
+
+                let seg_b1_blocked = segment_intersects_room(start, bend_b, placed, fi, ti);
+                let seg_b2_blocked = segment_intersects_room(bend_b, end, placed, fi, ti);
+
+                if !seg_b1_blocked && !seg_b2_blocked {
+                    // Alternate L-shape is clear.
+                    vec![start, bend_b, end]
+                } else {
+                    // Both L-shapes blocked → fall back to Z-shape.
+                    route_z_shape(start, end, exit_vertical, placed)
+                }
+            }
         } else if matches!(ff, Face::East | Face::West) {
             // Same axis, horizontal → Z-shape: H→V→H.
             let mid_x = find_safe_transfer_x(
@@ -486,6 +527,151 @@ fn intersects_any_room_y(y: i32, x_min: i32, x_max: i32, rooms: &[PlacedSpace]) 
         let r = &room.rect;
         y >= r.y && y < r.y + r.h && x_max >= r.x && x_min < r.x + r.w
     })
+}
+
+/// Check if an axis-aligned segment between two points passes through any room,
+/// excluding the rooms at `skip_a` and `skip_b` indices (the corridor's endpoints).
+fn segment_intersects_room(
+    a: Point,
+    b: Point,
+    rooms: &[PlacedSpace],
+    skip_a: usize,
+    skip_b: usize,
+) -> bool {
+    rooms.iter().enumerate().any(|(idx, room)| {
+        if idx == skip_a || idx == skip_b {
+            return false;
+        }
+        let r = &room.rect;
+        if a.x == b.x {
+            // Vertical segment
+            let y_min = a.y.min(b.y);
+            let y_max = a.y.max(b.y);
+            a.x >= r.x && a.x < r.x + r.w && y_max >= r.y && y_min < r.y + r.h
+        } else if a.y == b.y {
+            // Horizontal segment
+            let x_min = a.x.min(b.x);
+            let x_max = a.x.max(b.x);
+            a.y >= r.y && a.y < r.y + r.h && x_max >= r.x && x_min < r.x + r.w
+        } else {
+            // Non-axis-aligned (shouldn't happen in our routing)
+            false
+        }
+    })
+}
+
+/// Route a corridor as a Z-shape when L-shape or straight routing would pass
+/// through another room. Picks the appropriate Z-shape variant based on the
+/// exit direction.
+///
+/// For straight corridors (where start and end share an axis), the Z-shape deviates
+/// perpendicular to the corridor direction. A generous search range (±20 tiles)
+/// ensures the transfer segment can find room-free space.
+fn route_z_shape(
+    start: Point,
+    end: Point,
+    exit_vertical: bool,
+    rooms: &[PlacedSpace],
+) -> Vec<Point> {
+    if exit_vertical {
+        // Exit is vertical → V→H→V (find safe horizontal transfer).
+        // Expand range if start.x == end.x (straight vertical corridor needs x-deviation).
+        let (x_lo, x_hi) = if start.x == end.x {
+            (start.x - 20, start.x + 20)
+        } else {
+            (start.x.min(end.x), start.x.max(end.x))
+        };
+        let mid_y = find_safe_transfer_y_range(start.y, end.y, x_lo, x_hi, rooms);
+        vec![
+            start,
+            Point {
+                x: start.x,
+                y: mid_y,
+            },
+            Point { x: end.x, y: mid_y },
+            end,
+        ]
+    } else {
+        // Exit is horizontal → H→V→H (find safe vertical transfer).
+        // Expand range if start.y == end.y (straight horizontal corridor needs y-deviation).
+        let (y_lo, y_hi) = if start.y == end.y {
+            (start.y - 20, start.y + 20)
+        } else {
+            (start.y.min(end.y), start.y.max(end.y))
+        };
+        let mid_x = find_safe_transfer_x_range(start.x, end.x, y_lo, y_hi, rooms);
+        vec![
+            start,
+            Point {
+                x: mid_x,
+                y: start.y,
+            },
+            Point { x: mid_x, y: end.y },
+            end,
+        ]
+    }
+}
+
+/// Find a safe x-coordinate for a vertical transfer segment.
+/// Unlike [`find_safe_transfer_x`], this searches outside the x_from..x_to
+/// range (expanding outward) to handle straight corridors that need to deviate.
+fn find_safe_transfer_x_range(
+    x_from: i32,
+    x_to: i32,
+    y_min: i32,
+    y_max: i32,
+    rooms: &[PlacedSpace],
+) -> i32 {
+    let mid = (x_from + x_to) / 2;
+    if !intersects_any_room_x(mid, y_min, y_max, rooms) {
+        return mid;
+    }
+
+    // Search outward from midpoint (beyond the original range if needed).
+    for offset in 1..=40 {
+        let try_left = mid - offset;
+        if !intersects_any_room_x(try_left, y_min, y_max, rooms) {
+            return try_left;
+        }
+        let try_right = mid + offset;
+        if !intersects_any_room_x(try_right, y_min, y_max, rooms) {
+            return try_right;
+        }
+    }
+
+    // Fallback: midpoint (will likely still conflict but connects).
+    mid
+}
+
+/// Find a safe y-coordinate for a horizontal transfer segment.
+/// Unlike [`find_safe_transfer_y`], this searches outside the y_from..y_to
+/// range (expanding outward) to handle straight corridors that need to deviate.
+fn find_safe_transfer_y_range(
+    y_from: i32,
+    y_to: i32,
+    x_min: i32,
+    x_max: i32,
+    rooms: &[PlacedSpace],
+) -> i32 {
+    let mid = (y_from + y_to) / 2;
+    if !intersects_any_room_y(mid, x_min, x_max, rooms) {
+        return mid;
+    }
+
+    // Search outward from midpoint (beyond the original range if needed).
+    for offset in 1..=40 {
+        let try_up = mid - offset;
+        if !intersects_any_room_y(try_up, x_min, x_max, rooms) {
+            return try_up;
+        }
+        let try_down = mid + offset;
+        if !intersects_any_room_y(try_down, x_min, x_max, rooms) {
+            return try_down;
+        }
+    }
+
+    // Fallback: midpoint.
+    mid
 }
 
 #[cfg(test)]
