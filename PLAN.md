@@ -317,15 +317,160 @@ This is the fundamental shift. In a dungeon, you build rooms and connect them wi
 
 | # | Task | Status | Description |
 |---|---|---|---|
-| 6.1 | **Urban Space Archetypes & Edge Zones** | | New `SpaceArchetype` variants: `Plaza`, `Street`, `Alley`, `Shop`, `Warehouse`. `LocationKind::Urban` added. Extend the zone system with **edge zones** — spaces gain a periphery (`EdgeZone`) separate from interior. Streets: center zone (walkable path) + edge zones (where buildings attach, stalls spawn). Plazas: center open + edges populated. This makes feature placement and alignment saner than trying to scatter into a raw rect. |
-| 6.2 | **Multi-Connector Routing & Distribution** | | Spaces can have N>2 doors. `SpaceSpec` gains `max_connectors: Option<u32>` and `connector_distribution: ConnectorDistribution`. Distribution enum: `Uniform` (evenly spaced along wall), `Clustered` (grouped at center), `GridAligned` (snapped to regular intervals), `Ends` (only at short sides — for street endpoints). Without distribution, you get "6 doors randomly slapped onto a wall" which looks like a panic attack, not a street. |
-| 6.3 | **Alignment-Aware Geometry** | | Stronger constraints than just `FacesSpace`. New spatial constraints: `AlignEdge { a, b, side }` (building B's front wall aligns to street A's long edge), `AttachToEdge { building, street, side }` (building connects to a specific side of the street), `PreferOrientation { space, axis }` (streets prefer straight axes, plazas anchor intersections). Force-directed planner gains orientation forces, **but** a dedicated `StreetSkeletonPlanner` places streets first as axis-aligned backbone, then attaches buildings. Force-directed alone will fail at producing readable urban layouts. |
+| 6.1 | **Urban Space Archetypes & Edge Zones** | ✅ | New `SpaceArchetype` variants: `Plaza`, `Street`, `Alley`, `Shop`, `Warehouse`. `LocationKind::Urban` added. Extend the zone system with **edge zones** — spaces gain a periphery (`EdgeZone`) separate from interior. Streets: center zone (walkable path) + edge zones (where buildings attach, stalls spawn). Plazas: center open + edges populated. This makes feature placement and alignment saner than trying to scatter into a raw rect. |
+| 6.2 | **Multi-Connector Routing & Distribution** | ✅ | Spaces can have N>2 doors. `SpaceSpec` gains `max_connectors: Option<u32>` and `connector_distribution: ConnectorDistribution`. Distribution enum: `Uniform` (evenly spaced along wall), `Clustered` (grouped at center), `GridAligned` (snapped to regular intervals), `Ends` (only at short sides — for street endpoints). Without distribution, you get "6 doors randomly slapped onto a wall" which looks like a panic attack, not a street. |
+| 6.3 | **Alignment-Aware Geometry** | ✅ | Stronger constraints than just `FacesSpace`. New spatial constraints: `AlignEdge { a, b, side }` (building B's front wall aligns to street A's long edge), `AttachToEdge { building, street, side }` (building connects to a specific side of the street), `PreferOrientation { space, axis }` (streets prefer straight axes, plazas anchor intersections). Force-directed planner gains orientation forces, **but** a dedicated `StreetSkeletonPlanner` places streets first as axis-aligned backbone, then attaches buildings. Force-directed alone will fail at producing readable urban layouts. |
+
+**6.3 Subtasks:**
+
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 6.3.1 | **New `SpatialConstraint` variants** | ✅ | Add `AlignSide` enum (`North`, `South`, `East`, `West`), `Axis` enum (`Horizontal`, `Vertical`), and three new `SpatialConstraint` variants: `AlignEdge { a, b, side }` (space B's front wall aligns to space A's long edge), `AttachToEdge { building, street, side }` (building connects to a specific side of the street — implies adjacency + door placement), `PreferOrientation { space, axis }` (space should be elongated along the given axis). |
+| 6.3.2 | **Automatic urban constraint inference** | ✅ | Extend spatial planner with `derive_urban_constraints()`: when `LocationKind::Urban`, auto-generate `PreferOrientation` for Street/Alley archetypes, `AttachToEdge` for Shop/Warehouse nodes linked to Street/Plaza nodes, `AlignEdge` for building-archetype nodes sharing a link with a street. |
+| 6.3.3 | **`StreetSkeletonPlanner`** | ✅ | New `GeometryPlanner` impl in `src/geometry/street_skeleton.rs`. Algorithm: (1) partition spaces into backbone (Street/Alley/Plaza) vs attached (Shop/Warehouse/Chamber/etc), (2) place backbone first as axis-aligned rects (streets elongated, plazas square, at intersections), (3) attach buildings flush against backbone edges respecting `AttachToEdge`/`AlignEdge`, (4) resolve overlaps, (5) route with `ZShapeRouter`. |
+| 6.3.4 | **`GeometryStrategy::StreetSkeleton` variant** | ✅ | Add new variant to `GeometryStrategy`. Wire into `Pipeline::plan_geometry_with_retries`. Add `--layout street` CLI option. Auto-select for `LocationKind::Urban` unless explicitly overridden. |
+| 6.3.5 | **Orientation forces in force-directed planner** | ✅ | Extend `ForceDirectedGeometryPlanner` snap-to-grid: when a space has `PreferOrientation`, ensure its dimensions are oriented correctly (swap w/h if needed). Makes force-directed planner urban-aware as fallback. |
+| 6.3.6 | **Unit tests** | ✅ | Tests: `AlignEdge` places building flush against street side; `AttachToEdge` produces door on correct face; `PreferOrientation` ensures correct elongation axis; `StreetSkeletonPlanner` produces valid non-overlapping layout for street+buildings graph; T-junction (plaza+3 streets); regression (existing scenarios unchanged). |
+
+**6.3 New/Modified Files:**
+- `src/spatial/plan.rs` — `AlignSide`, `Axis` enums; 3 new `SpatialConstraint` variants
+- `src/spatial/planner.rs` — `derive_urban_constraints()` helper
+- `src/geometry/street_skeleton.rs` — **new** `StreetSkeletonPlanner`
+- `src/geometry/mod.rs` — `pub mod street_skeleton;`
+- `src/geometry/force_directed.rs` — orientation-aware snap-to-grid
+- `src/pipeline.rs` — `GeometryStrategy::StreetSkeleton`; auto-select for urban
+- `src/main.rs` — `Layout::Street` CLI variant
+
+**6.3 Acceptance Criteria:**
+- A test urban `SpatialPlan` (1 plaza + 2 streets + 4 shops) produces non-overlapping `GeometryPlan` with buildings flush against street edges.
+- Streets are axis-aligned (not diagonal/rotated).
+- Buildings' connector (door) faces the street they're attached to.
+- Existing demo scenarios produce identical results (regression).
+- `cargo test` passes (all existing tests + new 6.3 tests).
 | 6.4 | **Street Rasterization** | | Streets produce elongated footprints with implicit boundaries (not hard walls — edge zones define where the street ends and buildings begin). New tile: `Cobblestone`. Sidewalk zones (optional edge softness). Open ends connect to intersections. Connectors distributed along long sides via 6.2. T-junctions and crossroads emerge from multi-street intersections handled by the router. |
 | 6.5 | **Buildings: Expansions + Facades** | | Two building modes: (a) **Expansion** — quest-relevant buildings expand via 5.2 composition into multi-room interiors (sub-pattern's Entry = street-facing door). (b) **Facade** — lightweight non-quest buildings as nodes with connector + exterior only (no interior, no expansion). Keeps street density believable without complexity explosion. Without facades, you get empty streets with one important door. `ExitMarker` on expansion slots signals "leads to another map" for large buildings. |
 | 6.6 | **Urban Narrative Patterns** | | New story patterns for urban pacing: `urban_heist` (safehouse→market→fence→checkpoint→warehouse), `investigation` (crime scene→witnesses→suspect locations→confrontation), `chase` (origin→street→alley→rooftops→dead end). Streets appear as `Transition` nodes when they're gameplay-relevant (ambush, checkpoint, chase). Quiet connector streets stay as edges (routing). |
 | 6.7 | **Urban Content Rules** | | New feature types: `street_lamp`, `market_stall`, `well`, `signpost`, `cart`, `crate_stack`. Entity rules: `guard` (patrol on streets), `merchant` (near stalls in edge zones), `beggar` (alleys). Atmosphere profiles: `busy_market`, `seedy_docks`, `quiet_residential`. `PlacementStrategy::AlongAxis` for linear spaces. `PlacementStrategy::InEdgeZone` for periphery content. |
 | 6.8 | **Motif Propagation** | | Motifs gain spatial spread: a motif placed on one node propagates along edges with decay. `MotifField { source_role, decay_per_hop, leak_probability }`. Atmosphere profiles already react to tags — this adds tag *propagation* before profile matching. Enables "rat infestation spreading from warehouse along dock streets, leaking into adjacent basements." |
 | 6.9 | **New Scenario: Port District** | | Streets + docks + warehouses + tavern. Tests: multi-connector streets (5+ doors with uniform distribution), building expansion + facade density, street features in edge zones, alignment (buildings face streets). Motif: rat infestation originating from warehouse, spreading along dock streets. `PinEntity { "Rat King", target: Goal }`. 15–25 spaces total. |
+
+**Implementation Strategy: Street-Skeleton-First with Frontage Parcels**
+
+The core algorithm — minimal convincing urban generation in one sentence: *use a street-skeleton-first generator with frontage zones, parcel subdivision, and building facades/interior expansion.* This produces readable urban form without needing full city simulation.
+
+**Pipeline:**
+```
+place_anchors → build_street_skeleton → realize_streets → compute_frontage_zones → subdivide_parcels → assign_use → place_buildings → UrbanPlan → GeometryPlan
+```
+
+**Step 1 — Place Anchors.** Anchors are *reasons for streets to exist*: entry gate, market plaza, dock, warehouse, tavern, checkpoint, goal building, side alley exit. Each anchor has a kind, weight, and optional zone hint (e.g. plaza near center, docks on water edge, warehouse near docks). This drives the skeleton — streets don't exist arbitrarily, they connect motivating places.
+
+```rust
+struct UrbanAnchor {
+    id: AnchorId,
+    kind: AnchorKind,
+    weight: f32,
+    preferred_zone: Option<ZoneHint>,
+}
+```
+
+**Step 2 — Generate Street Skeleton.** An axis-aligned graph connecting anchors. Start simple: main street (entry → plaza → docks), side street (plaza → warehouse), alley (tavern → back route → goal). This is intentionally not fancy — connectivity and hierarchy matter more than organic curves at this stage.
+
+```rust
+fn build_street_skeleton(anchors: &[UrbanAnchor], rng: &mut Rng) -> StreetGraph {
+    let mut graph = StreetGraph::new();
+    // Main spine: entry → plaza → docks
+    graph.add_street(entry, plaza, StreetKind::Main);
+    graph.add_street(plaza, docks, StreetKind::Main);
+    // Side streets to important non-main anchors
+    for important in important_non_main_anchors() {
+        graph.add_street(plaza, important, StreetKind::Side);
+    }
+    // Optional alleys for alternative routing
+    add_optional_alleys(&mut graph, rng);
+    graph
+}
+```
+
+**Step 3 — Realize Streets as Width-Bearing Segments.** Each skeleton edge becomes a wide rectangle with kind-dependent width:
+- Main street: 5–7 tiles
+- Side street: 3–5 tiles
+- Alley: 1–2 tiles
+
+Rasterization: center = walkable cobblestone, edges = sidewalk / frontage zones.
+
+```rust
+struct StreetSegment {
+    from: Point,
+    to: Point,
+    width: i32,
+    kind: StreetKind,
+}
+```
+
+**Step 4 — Compute Frontage Zones.** For each street segment, compute buildable strips along both sides. This is the *secret sauce* — frontage zones are where buildings attach, facing the street.
+
+```
+████ buildings
+.... edge zone / sidewalk
+==== street center
+.... edge zone / sidewalk
+████ buildings
+```
+
+```rust
+struct FrontageZone {
+    street_id: StreetId,
+    side: Side,
+    rect: Rect,
+    allowed_uses: Vec<BuildingUse>,
+}
+```
+
+**Step 5 — Subdivide Frontage into Parcels.** Take each frontage strip and split into lots (width 4–9 tiles). This produces believable urban rhythm — irregular but coherent lot widths. Crucially: parcels *face the street*, so doors go on the frontage side and buildings align automatically.
+
+```rust
+fn subdivide_frontage(zone: &FrontageZone, rng: &mut Rng) -> Vec<Parcel> {
+    let mut parcels = Vec::new();
+    let mut cursor = zone.start();
+    while cursor < zone.end() {
+        let width = rng.range(4..9);
+        parcels.push(Parcel {
+            frontage: Rect::from_cursor(cursor, width, zone.depth),
+            street_id: zone.street_id,
+            side: zone.side,
+        });
+        cursor += width;
+    }
+    parcels
+}
+```
+
+**Step 6 — Assign Parcel Use.** Context-driven: near plaza → shops, tavern, market stalls; near docks → warehouse, storage, cheap tavern; side alleys → residences, shady doors; goal parcel → quest building. Uses weighted picking based on proximity to anchors.
+
+**Step 7 — Place Buildings.** Each parcel becomes either a **facade** (1–3 tiles deep, door on street side, no interior) or an **expanded interior** (parcel footprint becomes building shell, inside runs existing room composition / pattern expansion via 5.2). Door alignment is trivial because the parcel knows its street-facing edge.
+
+**What makes it convincing:** Not randomness — *alignment and frontage.* Streets first, buildings facing streets, doors on frontage, plazas at intersections, shops near plazas, warehouses near docks, alleys thinner and less regular, background facades for density, important buildings expanded into interiors.
+
+**Minimal starting scope:**
+1. One main street
+2. One plaza
+3. One dock/warehouse branch
+4. Frontage parcels
+5. Facade buildings
+6. One expanded quest building
+
+Everything else (motif propagation, chase sequences, complex narrative patterns) layers on top of this foundation.
+
+**How this maps to tasks:**
+- Steps 1–2 implement task 6.3 (StreetSkeletonPlanner + anchor placement)
+- Step 3 implements task 6.4 (street rasterization with width hierarchy)
+- Step 4 implements task 6.1 (edge zones = frontage zones)
+- Step 5 is new machinery — parcel subdivision produces the "urban rhythm" that makes districts convincing
+- Step 6 connects to task 6.7 (content rules) and atmosphere profiles
+- Step 7 implements task 6.5 (expansion + facades), with connector distribution (6.2) governing door placement along frontage
+
+---
 
 **Design decisions:**
 - **Topological inversion is real but doesn't require new abstractions.** Streets as `Transition` nodes + rich routing = the same graph model, different spatial weight. The geometry planner treats streets as primary layout elements (placed first), buildings as secondary (attached after).

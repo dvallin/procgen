@@ -360,6 +360,8 @@ mod tests {
                 label: None,
                 archetype: Some(SpaceArchetype::Chamber),
                 size_hint: SizeHint::Medium,
+                max_connectors: None,
+                connector_distribution: None,
             }],
             links: vec![],
             constraints: vec![],

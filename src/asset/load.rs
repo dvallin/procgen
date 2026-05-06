@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn load_embedded_patterns_succeeds() {
         let patterns = load_default_patterns().unwrap();
-        assert_eq!(patterns.len(), 5);
+        assert_eq!(patterns.len(), 6);
 
         // Verify pattern IDs.
         let ids: Vec<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
@@ -413,6 +413,7 @@ mod tests {
         assert!(ids.contains(&"linear_descent"));
         assert!(ids.contains(&"gauntlet"));
         assert!(ids.contains(&"branching_exploration"));
+        assert!(ids.contains(&"urban_market"));
     }
 
     #[test]
@@ -488,13 +489,14 @@ mod tests {
     #[test]
     fn load_embedded_vocabularies_succeeds() {
         let vocabs = load_default_vocabularies().unwrap();
-        assert_eq!(vocabs.len(), 5);
+        assert_eq!(vocabs.len(), 6);
 
         let ids: Vec<&str> = vocabs.iter().map(|v| v.id.as_str()).collect();
         assert!(ids.contains(&"undead_nobility"));
         assert!(ids.contains(&"urban_underground"));
         assert!(ids.contains(&"natural_cave"));
         assert!(ids.contains(&"vermin_cellar"));
+        assert!(ids.contains(&"market_district"));
     }
 
     #[test]

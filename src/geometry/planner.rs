@@ -579,6 +579,8 @@ mod tests {
             label: Some(format!("space_{}", id)),
             archetype: Some(SpaceArchetype::Chamber),
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

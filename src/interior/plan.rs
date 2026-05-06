@@ -75,6 +75,11 @@ pub enum ZoneKind {
     DoorPath,
     /// Remaining floor cells not classified above.
     Open,
+    /// The periphery of an urban space where buildings attach or stalls spawn
+    /// (sidewalk/frontage areas along streets and plazas).
+    EdgeZone,
+    /// The street-facing strip of a building parcel (where doors go).
+    Frontage,
 }
 
 /// A door-to-door traversal intent that must remain clear.

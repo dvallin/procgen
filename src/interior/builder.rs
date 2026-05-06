@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tracing::{debug, info, info_span};
 
 use crate::geometry::geom::GeometryPlan;
-use crate::spatial::plan::SpaceId;
+use crate::spatial::plan::{SpaceId, SpatialPlan};
 use crate::tile::map::TileMap;
 
 use super::paths::{compute_corridor_passthrough, compute_reserved_paths, find_room_doors};
@@ -22,7 +22,14 @@ use super::zones::classify_zones;
 ///
 /// This is the main entry point for the interior planning stage.
 /// Call after rasterization and scatter (needs final tile state).
-pub fn build_interior_plans(geometry: &GeometryPlan, tiles: &TileMap) -> Vec<InteriorPlan> {
+///
+/// When `spatial` is provided, the archetype of each space is looked up and
+/// passed to zone classification for urban-aware edge zones.
+pub fn build_interior_plans(
+    geometry: &GeometryPlan,
+    tiles: &TileMap,
+    spatial: Option<&SpatialPlan>,
+) -> Vec<InteriorPlan> {
     let _span = info_span!("interior_planning", rooms = geometry.spaces.len()).entered();
 
     let mut plans = Vec::with_capacity(geometry.spaces.len());
@@ -50,7 +57,13 @@ pub fn build_interior_plans(geometry: &GeometryPlan, tiles: &TileMap) -> Vec<Int
         }
 
         // Step 4: classify zones.
-        let zones = classify_zones(tiles, rect, &reserved_paths);
+        let archetype = spatial.and_then(|sp| {
+            sp.spaces
+                .iter()
+                .find(|s| s.id == placed.space_id)
+                .and_then(|s| s.archetype)
+        });
+        let zones = classify_zones(tiles, rect, &reserved_paths, archetype);
 
         debug!(
             space_id = placed.space_id.0,
@@ -138,7 +151,7 @@ mod tests {
     #[test]
     fn build_produces_one_plan_per_room() {
         let (map, geometry) = make_test_map_and_geometry();
-        let plans = build_interior_plans(&geometry, &map);
+        let plans = build_interior_plans(&geometry, &map, None);
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].space_id, SpaceId(0));
     }
@@ -146,14 +159,14 @@ mod tests {
     #[test]
     fn build_detects_doors() {
         let (map, geometry) = make_test_map_and_geometry();
-        let plans = build_interior_plans(&geometry, &map);
+        let plans = build_interior_plans(&geometry, &map, None);
         assert_eq!(plans[0].doors.len(), 2);
     }
 
     #[test]
     fn build_computes_reserved_paths() {
         let (map, geometry) = make_test_map_and_geometry();
-        let plans = build_interior_plans(&geometry, &map);
+        let plans = build_interior_plans(&geometry, &map, None);
         // Path from west door to east door should reserve the y=4 row interior cells.
         assert!(!plans[0].reserved_paths.is_empty());
     }
@@ -161,7 +174,7 @@ mod tests {
     #[test]
     fn build_classifies_zones() {
         let (map, geometry) = make_test_map_and_geometry();
-        let plans = build_interior_plans(&geometry, &map);
+        let plans = build_interior_plans(&geometry, &map, None);
         assert!(!plans[0].zones.is_empty());
         // All interior floor cells should be classified.
         let total: usize = plans[0].zones.iter().map(|z| z.cells.len()).sum();
@@ -171,7 +184,7 @@ mod tests {
     #[test]
     fn interior_plan_map_lookup() {
         let (map, geometry) = make_test_map_and_geometry();
-        let plans = build_interior_plans(&geometry, &map);
+        let plans = build_interior_plans(&geometry, &map, None);
         let map_lookup = interior_plan_map(&plans);
         assert!(map_lookup.contains_key(&SpaceId(0)));
     }

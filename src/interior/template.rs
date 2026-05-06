@@ -133,6 +133,8 @@ mod tests {
             label: None,
             archetype,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

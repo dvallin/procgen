@@ -258,23 +258,52 @@ fn route_links(spatial: &SpatialPlan, placed: &[PlacedSpace]) -> Vec<PlacedLink>
         let (fixed, rs, re) = face_interior_range(rect, face);
         let center = (rs + re) / 2;
 
-        // Mergeable links all share the center exit point (one door).
-        for &li in mergeable.iter() {
-            exit_points[li] = point_on_face(face, fixed, center);
-        }
+        // Determine if this room is a high-connector space (plaza, street, etc.)
+        // that should spread exits instead of merging them.
+        // Only spread for spaces with explicitly high connector counts (>6),
+        // which are urban archetypes like Street(10), Plaza(8).
+        let from_space_id = placed[from_idx].space_id;
+        let spread_exits = mergeable.len() > 1
+            && spatial
+                .spaces
+                .iter()
+                .find(|s| s.id == from_space_id)
+                .map(|s| s.effective_max_connectors() > 6)
+                .unwrap_or(false);
 
-        // Isolated links each get their own exit point, offset from center.
-        for (i, &li) in isolated.iter().enumerate() {
-            let pos = if mergeable.is_empty() && isolated.len() == 1 {
-                // Only link on this face — use center.
-                center
+        if spread_exits {
+            // High-connector room: give each mergeable link its own exit point.
+            let total = mergeable.len() + isolated.len();
+            let available = re - rs;
+            let step = if total > 1 {
+                (available / (total as i32)).max(2)
             } else {
-                // Alternate sides: center−3, center+3, center−6, …
-                let half = (i as i32 / 2) + 1;
-                let sign = if i % 2 == 0 { -1 } else { 1 };
-                (center + sign * half * 3).clamp(rs, re)
+                0
             };
-            exit_points[li] = point_on_face(face, fixed, pos);
+            let start_pos = center - (step * (total as i32 - 1)) / 2;
+            for (i, &li) in mergeable.iter().chain(isolated.iter()).enumerate() {
+                let pos = (start_pos + step * i as i32).clamp(rs, re);
+                exit_points[li] = point_on_face(face, fixed, pos);
+            }
+        } else {
+            // Normal behavior: mergeable links share the center exit point (one door).
+            for &li in mergeable.iter() {
+                exit_points[li] = point_on_face(face, fixed, center);
+            }
+
+            // Isolated links each get their own exit point, offset from center.
+            for (i, &li) in isolated.iter().enumerate() {
+                let pos = if mergeable.is_empty() && isolated.len() == 1 {
+                    // Only link on this face — use center.
+                    center
+                } else {
+                    // Alternate sides: center−3, center+3, center−6, …
+                    let half = (i as i32 / 2) + 1;
+                    let sign = if i % 2 == 0 { -1 } else { 1 };
+                    (center + sign * half * 3).clamp(rs, re)
+                };
+                exit_points[li] = point_on_face(face, fixed, pos);
+            }
         }
     }
 
@@ -702,6 +731,8 @@ mod tests {
             atmosphere_tags: vec![],
             motifs: vec![],
             label: None,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

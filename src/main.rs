@@ -3,6 +3,7 @@ use clap::{Parser, ValueEnum};
 use procgen::demo::cave::build_cave_situation;
 use procgen::demo::cellar::build_cellar_situation;
 use procgen::demo::crypt::build_crypt_situation;
+use procgen::demo::market::build_market_situation;
 use procgen::demo::mine::build_mine_situation;
 use procgen::demo::tavern::build_tavern_situation;
 use procgen::entity::registry::EntityRegistry;
@@ -49,6 +50,7 @@ enum Scenario {
     Cave,
     Cellar,
     Mine,
+    Market,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -64,6 +66,8 @@ enum Layout {
     Column,
     /// Force-directed simulation (better for larger maps).
     Force,
+    /// Street-skeleton-first layout for urban environments.
+    Street,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -100,6 +104,7 @@ fn main() {
         geometry_strategy: match cli.layout {
             Layout::Column => GeometryStrategy::Column,
             Layout::Force => GeometryStrategy::ForceDirected,
+            Layout::Street => GeometryStrategy::StreetSkeleton,
         },
         ..PipelineConfig::default()
     };
@@ -129,6 +134,11 @@ fn main() {
         Scenario::Mine => {
             let situation = build_mine_situation();
             println!("=== Abandoned Mine ===\n");
+            pipeline.run(&situation)
+        }
+        Scenario::Market => {
+            let situation = build_market_situation();
+            println!("=== Market District ===\n");
             pipeline.run(&situation)
         }
     };

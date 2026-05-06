@@ -316,6 +316,8 @@ mod tests {
                 label: None,
                 archetype: Some(SpaceArchetype::Hall),
                 size_hint: SizeHint::Medium,
+                max_connectors: None,
+                connector_distribution: None,
             }],
             links: vec![],
             constraints: vec![],

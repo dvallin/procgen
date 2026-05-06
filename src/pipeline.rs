@@ -26,8 +26,10 @@ use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
     ColumnGeometryPlanner, GeometryPlanError, GeometryPlanner, PlacementConfig,
 };
+use crate::geometry::street_skeleton::StreetSkeletonPlanner;
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
 use crate::intent::generic_builder::GenericIntentBuilder;
+use crate::intent::map_intent::LocationKind;
 use crate::intent::map_intent::MapIntent;
 use crate::interior::builder::build_interior_plans;
 use crate::interior::paths::{compute_reserved_paths, find_room_doors};
@@ -59,6 +61,9 @@ pub enum GeometryStrategy {
     /// Force-directed simulation layout.
     /// Better for medium-to-large maps (7–15+ rooms) with complex topology.
     ForceDirected,
+    /// Street-skeleton-first layout for urban environments.
+    /// Places backbone streets/plazas first, then attaches buildings.
+    StreetSkeleton,
 }
 
 impl Default for GeometryStrategy {
@@ -442,7 +447,7 @@ impl Pipeline {
 
         // ── 5b. Interior planning ──────────────────────────────────────
         info!("computing interior plans");
-        let interiors = build_interior_plans(&geometry, &tiles);
+        let interiors = build_interior_plans(&geometry, &tiles, Some(&spatial));
         debug!(rooms = interiors.len(), "interior plans ready");
 
         // ── 6. Feature planning + validation ───────────────────────
@@ -618,6 +623,16 @@ impl Pipeline {
         let base_config = PlacementConfig::default();
         let mut last_errors: Vec<String> = Vec::new();
 
+        // Auto-select StreetSkeleton for Urban location kinds when using default strategy
+        let effective_strategy = if spatial.location_kind == LocationKind::Urban {
+            match &self.config.geometry_strategy {
+                GeometryStrategy::ForceDirected => &GeometryStrategy::StreetSkeleton,
+                other => other,
+            }
+        } else {
+            &self.config.geometry_strategy
+        };
+
         for attempt in 0..=self.config.max_retries {
             let config = self.relaxed_config(&base_config, attempt);
 
@@ -625,11 +640,11 @@ impl Pipeline {
                 attempt = attempt,
                 min_gap = config.min_gap,
                 separation_gap = config.separation_gap,
-                strategy = ?self.config.geometry_strategy,
+                strategy = ?effective_strategy,
                 "geometry attempt"
             );
 
-            let plan = match &self.config.geometry_strategy {
+            let plan = match effective_strategy {
                 GeometryStrategy::Column => {
                     let planner = ColumnGeometryPlanner { config };
                     planner.plan(spatial, rng)
@@ -640,6 +655,12 @@ impl Pipeline {
                             placement: config,
                             ..ForceDirectedConfig::default()
                         },
+                    };
+                    planner.plan(spatial, rng)
+                }
+                GeometryStrategy::StreetSkeleton => {
+                    let planner = StreetSkeletonPlanner {
+                        config: config.clone(),
                     };
                     planner.plan(spatial, rng)
                 }

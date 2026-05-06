@@ -23,6 +23,9 @@ Working vertical slice with full pipeline, property-based tests, and integration
 - **Phase 5.6 — ANSI Colored Rendering**: `src/tile/color.rs` module adds colored ASCII output. Entities colored by danger (Boss=bold-red, Hazard=magenta, elite=yellow, Creature=red, NPC=green). Features colored by importance (Trap=red, Interactable=bold-cyan, Container=yellow, Furniture=blue, Decoration=dark-gray). Tiles get subtle coloring (walls=dark-gray, doors=yellow, water=blue, grass=green, etc.). CLI gains `--color` flag (`auto`/`on`/`off`; default `auto` detects TTY). Zero new dependencies (raw ANSI escape codes).
 - **Phase 5.7 — Rest Points & Seed Reporting**: Role-based tension caps create pacing valleys in composed maps. Sub-pattern Entry nodes are converted to **Transition** during grafting (`compose.rs`) — they're passages into sub-areas, not dungeon entrances. **Transition rooms** capped at Medium — passages provide breathing room. **Hub rooms** capped at High — crossroads, not boss chambers. Gate and Branch remain uncapped (gates ARE the challenge). Only the root Entry (depth 0) is forced Low. **Rest point insertion** (`src/intent/rest_points.rs`): after composition, if the critical path > 5 edges and lacks a natural Low room mid-path, a "Safe Passage" Transition node with `rest_point` structural tag is inserted by splitting a Traversal edge near the midpoint. The tension system forces `rest_point`-tagged rooms to Low. Result: composed cave maps show proper tension curves (Low → Medium → High → Climax → Low → Medium → Medium → Medium → Climax) with Transition caps providing natural valleys. `PipelineResult.seed: u64` field stores the actual seed used (generated from entropy when not specified). CLI always prints `(seed: N)` — users can reproduce any map with `--seed N`. 4 new unit tests in `tension.rs` (11 total).
 - **Phase 5.8 — Pacing Validator**: `PacingValidator` in `src/validate/pacing.rs` checks the tension curve for degenerate patterns. 4 checks: flat curve (all rooms same tension), no climax (no dramatic peak), immediate climax (Climax at depth 1 with long map), no rest on long critical path. All produce Warnings/Infos (never Errors — bad pacing doesn't fail generation). `PipelineResult.pacing_warnings: Vec<String>` carries issues to the world engine. CLI prints ⚠ warnings when present. 8 unit tests for the validator.
+- **Phase 6.1 — Urban Space Archetypes & Edge Zones**: New `SpaceArchetype` variants (`Plaza`, `Street`, `Alley`, `Shop`, `Warehouse`). `LocationKind::Urban` added. `ZoneKind` extended with `EdgeZone` (periphery of urban spaces where buildings/stalls attach) and `Frontage` (street-facing strip of building parcels). Zone classification (`classify_zones`) gains optional `archetype` parameter — when urban archetypes are present, cells are classified using urban-specific rules: streets get linear edge zones along long edges, plazas get all-edge zones, shops/warehouses get frontage on the street-facing wall. Spatial planner gains dimension resolution for urban archetypes (elongated streets, square plazas).
+- **Phase 6.2 — Multi-Connector Routing & Distribution**: `ConnectorDistribution` enum (`Uniform`, `Clustered`, `GridAligned`, `Ends`). `SpaceSpec` gains `max_connectors: Option<u32>` and `connector_distribution: Option<ConnectorDistribution>`. Helper methods `effective_max_connectors()` and `effective_connector_distribution()` provide archetype-aware defaults (Street=10/Uniform, Plaza=8/Clustered, Corridor/Alley=4/Ends, Warehouse=4/GridAligned). 16 unit tests for connector behavior.
+- **Phase 6.3 — Alignment-Aware Geometry**: `AlignSide` enum (`North`/`South`/`East`/`West`), `Axis` enum (`Horizontal`/`Vertical`), 3 new `SpatialConstraint` variants (`AlignEdge`, `AttachToEdge`, `PreferOrientation`). `derive_urban_constraints()` auto-infers orientation+attachment constraints for `LocationKind::Urban`. `StreetSkeletonPlanner` — new `GeometryPlanner` impl in `src/geometry/street_skeleton.rs`: partitions spaces into backbone (Street/Alley/Plaza) vs attached (buildings), places backbone axis-aligned first, attaches buildings flush against backbone edges, resolves overlaps. `GeometryStrategy::StreetSkeleton` variant + auto-select for Urban. CLI `--layout street`. Force-directed planner gains orientation-aware snap-to-grid (swaps dimensions to match `PreferOrientation`). 5 unit tests for street skeleton planner.
 
 ## Pipeline (current)
 
@@ -70,6 +73,7 @@ src/
 │   ├── common.rs        # Shared helpers (get_space_dimensions, build_adjacency, find_bfs_root, normalize_positions, apply_shape_refinement)
 │   ├── planner.rs       # GeometryPlanner trait + ColumnGeometryPlanner (BFS column layout)
 │   ├── force_directed.rs # ForceDirectedGeometryPlanner (physics simulation layout)
+│   ├── street_skeleton.rs # StreetSkeletonPlanner (backbone-first urban layout)
 │   ├── routing.rs       # CorridorRouter trait + ZShapeRouter (face-based routing with corridor merging)
 │   └── shape.rs         # ShapeRefinement trait + RectShape (no-op) + CaveIrregularizer (organic cave shapes)
 ├── tile/                # Tile-level rasterization
@@ -170,12 +174,13 @@ cargo run -- --color off           # Plain text (no escape codes)
 cargo run -- --color auto          # Auto-detect terminal (default)
 cargo run -- --layout column       # Use BFS column layout (original)
 cargo run -- --layout force        # Use force-directed layout (default)
+cargo run -- --layout street       # Use street-skeleton layout (urban)
 cargo run -- --trace               # INFO-level pipeline trace (to stderr)
 cargo run -- --trace debug         # DEBUG-level (placement details, routing decisions)
 cargo run -- --trace all           # TRACE-level (everything)
 cargo run -- --help                # Show CLI usage
 RUST_LOG=procgen=debug cargo run -- --trace  # Override via env var
-cargo test       # Runs all tests (461 currently: 357 unit/proptest + 23 regression + 77 integration + 4 doctests)
+cargo test       # Runs all tests (487 currently: 383 unit/proptest + 23 regression + 77 integration + 4 doctests)
 ```
 
 ## Target Architecture

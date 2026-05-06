@@ -554,5 +554,134 @@
         ]
       }
     ]
+  },
+  {
+    "id": "market_district",
+    "name": "Market District",
+    "description": "A bustling market district with a central plaza, connecting streets, and surrounding shops and warehouses.",
+    "location_kind": "Urban",
+    "motifs": ["commerce", "crowd", "stone"],
+    "roles": [
+      {
+        "role": "Entry",
+        "entries": [
+          {
+            "label": "District Gate",
+            "tags": ["gate", "stone"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Street Entrance",
+            "tags": ["busy", "open"],
+            "archetype": "Corridor"
+          }
+        ]
+      },
+      {
+        "role": "Hub",
+        "entries": [
+          {
+            "label": "Market Plaza",
+            "tags": ["open", "busy", "commerce"],
+            "archetype": "Plaza"
+          },
+          {
+            "label": "Town Square",
+            "tags": ["open", "civic"],
+            "archetype": "Plaza"
+          }
+        ]
+      },
+      {
+        "role": "Gate",
+        "entries": [
+          {
+            "label": "Guarded Checkpoint",
+            "tags": ["locked", "guarded"],
+            "archetype": "Vestibule"
+          },
+          {
+            "label": "Toll Gate",
+            "tags": ["locked", "commerce"],
+            "archetype": "Vestibule"
+          }
+        ]
+      },
+      {
+        "role": "Goal",
+        "entries": [
+          {
+            "label": "Merchant's Warehouse",
+            "tags": ["main_goal", "commerce", "storage"],
+            "archetype": "Warehouse"
+          },
+          {
+            "label": "Guild Hall",
+            "tags": ["main_goal", "civic"],
+            "archetype": "Warehouse"
+          }
+        ]
+      },
+      {
+        "role": "Reward",
+        "entries": [
+          {
+            "label": "Hidden Vault",
+            "tags": ["secret", "valuable"],
+            "archetype": "Vault"
+          },
+          {
+            "label": "Smuggler's Cellar",
+            "tags": ["secret", "contraband"],
+            "archetype": "Chamber"
+          }
+        ]
+      },
+      {
+        "role": "Branch",
+        "entries": [
+          {
+            "label": "Fishmonger's Shop",
+            "tags": ["optional", "commerce", "fish"],
+            "archetype": "Shop"
+          },
+          {
+            "label": "Spice Trader",
+            "tags": ["optional", "commerce", "exotic"],
+            "archetype": "Shop"
+          },
+          {
+            "label": "Blacksmith",
+            "tags": ["optional", "craft"],
+            "archetype": "Shop"
+          },
+          {
+            "label": "Dockside Tavern",
+            "tags": ["optional", "social"],
+            "archetype": "Workshop"
+          }
+        ]
+      },
+      {
+        "role": "Transition",
+        "entries": [
+          {
+            "label": "Market Street",
+            "tags": ["busy", "commerce"],
+            "archetype": "Street"
+          },
+          {
+            "label": "Harbour Road",
+            "tags": ["open", "docks"],
+            "archetype": "Street"
+          },
+          {
+            "label": "Back Alley",
+            "tags": ["narrow", "shady"],
+            "archetype": "Alley"
+          }
+        ]
+      }
+    ]
   }
 ]

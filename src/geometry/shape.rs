@@ -372,6 +372,8 @@ mod tests {
             label: Some("Test Room".to_string()),
             archetype: None,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

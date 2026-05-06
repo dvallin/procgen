@@ -22,7 +22,7 @@ use crate::geometry::planner::{GeometryPlanError, GeometryPlanner, PlacementConf
 use crate::geometry::routing::{CorridorRouter, ZShapeRouter};
 #[cfg(test)]
 use crate::intent::map_intent::LocationKind;
-use crate::spatial::plan::{SpaceId, SpatialConstraint, SpatialPlan};
+use crate::spatial::plan::{Axis, SpaceId, SpatialConstraint, SpatialPlan};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -650,17 +650,47 @@ fn initial_placement(
 /// Convert floating-point CENTER positions to integer grid positions as PlacedSpaces.
 /// Positions in the simulation represent room centers; we convert to top-left corner
 /// for the Rect by subtracting half the room dimensions.
+///
+/// When a `PreferOrientation` constraint exists for a space, dimensions are swapped
+/// if needed to ensure the space is elongated along the preferred axis.
 fn snap_to_grid(
     spatial: &SpatialPlan,
     positions: &HashMap<SpaceId, (f64, f64)>,
     dimensions: &HashMap<SpaceId, (i32, i32)>,
 ) -> Vec<PlacedSpace> {
+    // Collect orientation constraints for fast lookup.
+    let orientations: HashMap<SpaceId, Axis> = spatial
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            SpatialConstraint::PreferOrientation { space, axis } => Some((*space, *axis)),
+            _ => None,
+        })
+        .collect();
+
     spatial
         .spaces
         .iter()
         .map(|space| {
             let (cx, cy) = positions[&space.id];
-            let (w, h) = dimensions[&space.id];
+            let (mut w, mut h) = dimensions[&space.id];
+
+            // Enforce orientation constraint: swap dimensions if needed.
+            if let Some(axis) = orientations.get(&space.id) {
+                match axis {
+                    Axis::Horizontal => {
+                        if h > w {
+                            std::mem::swap(&mut w, &mut h);
+                        }
+                    }
+                    Axis::Vertical => {
+                        if w > h {
+                            std::mem::swap(&mut w, &mut h);
+                        }
+                    }
+                }
+            }
+
             // Convert center position to top-left corner
             let x = (cx - w as f64 / 2.0).round() as i32;
             let y = (cy - h as f64 / 2.0).round() as i32;
@@ -897,6 +927,8 @@ mod tests {
             label: Some(format!("space_{}", id)),
             archetype: Some(SpaceArchetype::Chamber),
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

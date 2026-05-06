@@ -1389,6 +1389,11 @@ mod stress_tests {
             Just(SpaceArchetype::Shaft),
             Just(SpaceArchetype::Courtyard),
             Just(SpaceArchetype::Workshop),
+            Just(SpaceArchetype::Plaza),
+            Just(SpaceArchetype::Street),
+            Just(SpaceArchetype::Alley),
+            Just(SpaceArchetype::Shop),
+            Just(SpaceArchetype::Warehouse),
         ]
     }
 
@@ -1457,6 +1462,8 @@ mod stress_tests {
                             label: Some(format!("space_{}", i)),
                             archetype: Some(archetype),
                             size_hint: SizeHint::Medium,
+                            max_connectors: None,
+                            connector_distribution: None,
                         }
                     })
                     .collect();
@@ -2264,6 +2271,11 @@ mod random_rules_tests {
             Just(SpaceArchetype::Shaft),
             Just(SpaceArchetype::Courtyard),
             Just(SpaceArchetype::Workshop),
+            Just(SpaceArchetype::Plaza),
+            Just(SpaceArchetype::Street),
+            Just(SpaceArchetype::Alley),
+            Just(SpaceArchetype::Shop),
+            Just(SpaceArchetype::Warehouse),
         ]
     }
 

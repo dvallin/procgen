@@ -295,6 +295,8 @@ mod tests {
             label: None,
             archetype: None,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

@@ -69,6 +69,8 @@ impl SpatialPlanner for SimpleSpatialPlanner {
                 label: node.label.clone(),
                 archetype,
                 size_hint,
+                max_connectors: None,
+                connector_distribution: None,
             });
         }
 
@@ -115,7 +117,13 @@ impl SpatialPlanner for SimpleSpatialPlanner {
 
         // Derive constraints from the structural graph.
         // For now, just mark gate relationships.
-        let constraints = derive_default_constraints(&spaces, scenario);
+        let mut constraints = derive_default_constraints(&spaces, scenario);
+
+        // Add urban alignment constraints when the location is Urban.
+        if intent.location_kind == crate::intent::map_intent::LocationKind::Urban {
+            let urban = derive_urban_constraints(&spaces, &links);
+            constraints.extend(urban);
+        }
 
         for constraint in &constraints {
             debug!(?constraint, "derived constraint");
@@ -198,13 +206,35 @@ fn resolve_dimensions(size_hint: SizeHint, archetype: Option<SpaceArchetype>) ->
             let side = base_w.min(base_h);
             (side, side)
         }
-        Some(SpaceArchetype::Corridor) => {
-            // Corridors are elongated — stretch the wider axis further.
+        Some(SpaceArchetype::Corridor) | Some(SpaceArchetype::Alley) => {
+            // Corridors and alleys are elongated — stretch the wider axis further.
             if base_w >= base_h {
                 (base_w + 2, base_h.max(3))
             } else {
                 (base_w.max(3), base_h + 2)
             }
+        }
+        Some(SpaceArchetype::Street) => {
+            // Streets are wide and long — use full width, stretch length.
+            if base_w >= base_h {
+                (base_w + 4, base_h)
+            } else {
+                (base_w, base_h + 4)
+            }
+        }
+        Some(SpaceArchetype::Plaza) => {
+            // Plazas are large and roughly square.
+            let side = base_w.max(base_h);
+            (side, side)
+        }
+        Some(SpaceArchetype::Shop) => {
+            // Shops are small and squarish — similar to chambers.
+            let side = base_w.min(base_h);
+            (side, side)
+        }
+        Some(SpaceArchetype::Warehouse) => {
+            // Warehouses are large rectangular spaces.
+            (base_w, base_h)
         }
         // All other archetypes (Hall, Vault, Vestibule, Shaft, Courtyard, Workshop)
         // use the base rectangular proportions directly.
@@ -248,6 +278,138 @@ fn derive_default_constraints(
     }
 
     constraints
+}
+
+/// Derive urban-specific alignment constraints from space archetypes and links.
+///
+/// When `LocationKind::Urban` is active, this function infers:
+/// - `PreferOrientation` for Street/Alley archetypes (based on their dimension proportions)
+/// - `AttachToEdge` for Shop/Warehouse nodes linked to Street/Plaza nodes
+/// - `AlignEdge` for other building-like nodes sharing a link with a backbone space
+fn derive_urban_constraints(spaces: &[SpaceSpec], links: &[SpaceLink]) -> Vec<SpatialConstraint> {
+    let mut constraints = Vec::new();
+
+    // Helper: is this archetype a "backbone" (street-like) space?
+    let is_backbone = |arch: Option<SpaceArchetype>| -> bool {
+        matches!(
+            arch,
+            Some(SpaceArchetype::Street)
+                | Some(SpaceArchetype::Alley)
+                | Some(SpaceArchetype::Plaza)
+        )
+    };
+
+    // Helper: is this archetype a "building" (attaches to backbone)?
+    let is_building = |arch: Option<SpaceArchetype>| -> bool {
+        matches!(
+            arch,
+            Some(SpaceArchetype::Shop)
+                | Some(SpaceArchetype::Warehouse)
+                | Some(SpaceArchetype::Chamber)
+                | Some(SpaceArchetype::Vault)
+                | Some(SpaceArchetype::Workshop)
+        )
+    };
+
+    // 1. PreferOrientation for streets/alleys
+    for space in spaces {
+        match space.archetype {
+            Some(SpaceArchetype::Street) | Some(SpaceArchetype::Alley) => {
+                // Determine axis from the space's resolved dimensions.
+                let (w, h) = match &space.kind {
+                    SpaceKind::Atomic(a) => (a.width, a.height),
+                };
+                let axis = if w >= h {
+                    Axis::Horizontal
+                } else {
+                    Axis::Vertical
+                };
+                constraints.push(SpatialConstraint::PreferOrientation {
+                    space: space.id,
+                    axis,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // 2. AttachToEdge / AlignEdge for buildings linked to backbone spaces
+    for link in links {
+        let from_space = spaces.iter().find(|s| s.id == link.from);
+        let to_space = spaces.iter().find(|s| s.id == link.to);
+
+        if let (Some(from_s), Some(to_s)) = (from_space, to_space) {
+            // Case: from is backbone, to is building
+            if is_backbone(from_s.archetype) && is_building(to_s.archetype) {
+                let side = infer_attach_side(from_s, to_s, spaces, links);
+                if matches!(
+                    to_s.archetype,
+                    Some(SpaceArchetype::Shop) | Some(SpaceArchetype::Warehouse)
+                ) {
+                    constraints.push(SpatialConstraint::AttachToEdge {
+                        building: to_s.id,
+                        street: from_s.id,
+                        side,
+                    });
+                } else {
+                    constraints.push(SpatialConstraint::AlignEdge {
+                        a: from_s.id,
+                        b: to_s.id,
+                        side,
+                    });
+                }
+            }
+            // Case: to is backbone, from is building
+            else if is_backbone(to_s.archetype) && is_building(from_s.archetype) {
+                let side = infer_attach_side(to_s, from_s, spaces, links);
+                if matches!(
+                    from_s.archetype,
+                    Some(SpaceArchetype::Shop) | Some(SpaceArchetype::Warehouse)
+                ) {
+                    constraints.push(SpatialConstraint::AttachToEdge {
+                        building: from_s.id,
+                        street: to_s.id,
+                        side,
+                    });
+                } else {
+                    constraints.push(SpatialConstraint::AlignEdge {
+                        a: to_s.id,
+                        b: from_s.id,
+                        side,
+                    });
+                }
+            }
+        }
+    }
+
+    constraints
+}
+
+/// Infer which side of the street the building should attach to.
+///
+/// Strategy: count how many buildings are already on each side (North/South for
+/// horizontal streets, East/West for vertical streets) and alternate. For the
+/// first building, default to South (horizontal) or East (vertical).
+fn infer_attach_side(
+    street: &SpaceSpec,
+    _building: &SpaceSpec,
+    _all_spaces: &[SpaceSpec],
+    _links: &[SpaceLink],
+) -> AlignSide {
+    // Determine street orientation from its dimensions.
+    let (w, h) = match &street.kind {
+        SpaceKind::Atomic(a) => (a.width, a.height),
+    };
+
+    if w >= h {
+        // Horizontal street — buildings attach to North or South.
+        // Default: South (street-facing = building's north wall faces south edge of street).
+        AlignSide::South
+    } else {
+        // Vertical street — buildings attach to East or West.
+        // Default: East.
+        AlignSide::East
+    }
 }
 
 #[cfg(test)]
@@ -510,6 +672,17 @@ mod tests {
                         prop_assert!(valid_ids.contains(space));
                     }
                     SpatialConstraint::PreferCentral { space } => {
+                        prop_assert!(valid_ids.contains(space));
+                    }
+                    SpatialConstraint::AlignEdge { a, b, .. } => {
+                        prop_assert!(valid_ids.contains(a));
+                        prop_assert!(valid_ids.contains(b));
+                    }
+                    SpatialConstraint::AttachToEdge { building, street, .. } => {
+                        prop_assert!(valid_ids.contains(building));
+                        prop_assert!(valid_ids.contains(street));
+                    }
+                    SpatialConstraint::PreferOrientation { space, .. } => {
                         prop_assert!(valid_ids.contains(space));
                     }
                 }

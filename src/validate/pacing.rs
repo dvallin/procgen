@@ -344,6 +344,8 @@ mod tests {
             label: Some(format!("Room {}", id)),
             archetype: None,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 
