@@ -246,6 +246,8 @@ mod tests {
                 label: Some("test_room".into()),
                 archetype: None,
                 size_hint: SizeHint::Small,
+                max_connectors: None,
+                connector_distribution: None,
             }],
             links: vec![],
             constraints: vec![],

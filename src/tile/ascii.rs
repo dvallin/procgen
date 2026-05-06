@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::entity::plan::{EntityArchetypeId, EntityPlan};
+use crate::entity::registry::EntityRegistry;
 use crate::feature::plan::FeaturePlan;
 use crate::feature::registry::{FeatureRegistry, FeatureType};
 use crate::geometry::geom::Point;
@@ -16,6 +17,7 @@ fn render_impl(
     entities: &EntityPlan,
     tile_registry: &TileRegistry,
     feature_registry: &FeatureRegistry,
+    entity_registry: &EntityRegistry,
 ) -> String {
     // Build overlay: features first, then entities (entities win ties).
     let mut overlay: HashMap<Point, char> = HashMap::new();
@@ -26,7 +28,7 @@ fn render_impl(
         }
     }
     for entity in &entities.entities {
-        let ch = entity_char(&entity.archetype);
+        let ch = entity_registry.ascii_char(&entity.archetype);
         overlay.insert(entity.position, ch);
     }
 
@@ -57,8 +59,16 @@ pub fn render_ascii(
     entities: &EntityPlan,
     tile_registry: &TileRegistry,
     feature_registry: &FeatureRegistry,
+    entity_registry: &EntityRegistry,
 ) -> String {
-    render_impl(map, features, entities, tile_registry, feature_registry)
+    render_impl(
+        map,
+        features,
+        entities,
+        tile_registry,
+        feature_registry,
+        entity_registry,
+    )
 }
 
 /// Renders a `TileMap` with feature and entity overlays using the default registries.
@@ -72,7 +82,15 @@ pub fn render_ascii_default(
 ) -> String {
     let tile_registry = TileRegistry::default_registry();
     let feature_registry = FeatureRegistry::default_registry();
-    render_impl(map, features, entities, &tile_registry, &feature_registry)
+    let entity_registry = EntityRegistry::default_registry();
+    render_impl(
+        map,
+        features,
+        entities,
+        &tile_registry,
+        &feature_registry,
+        &entity_registry,
+    )
 }
 
 /// Returns the ASCII character used to represent a given [`FeatureType`].
@@ -86,22 +104,11 @@ pub fn feature_char(feature_type: &FeatureType) -> char {
 
 /// Returns the ASCII character used to represent an entity archetype.
 ///
-/// Uses substring matching on the archetype ID for MVP flexibility.
+/// Uses the default entity registry for lookup. For custom registries,
+/// use [`EntityRegistry::ascii_char`] directly.
 pub fn entity_char(archetype: &EntityArchetypeId) -> char {
-    let id = archetype.0.as_str();
-    if id.contains("rat") {
-        'r'
-    } else if id.contains("guardian") {
-        'G'
-    } else if id.contains("skeleton") {
-        's'
-    } else if id.contains("smuggler") {
-        '@'
-    } else if id.contains("mimic") {
-        'M'
-    } else {
-        'E'
-    }
+    let registry = EntityRegistry::default_registry();
+    registry.ascii_char(archetype)
 }
 
 /// Renders a `TileMap` with feature/entity overlays AND room letter annotations.
@@ -123,6 +130,7 @@ pub fn render_ascii_annotated(
     entities: &crate::entity::plan::EntityPlan,
     tile_registry: &TileRegistry,
     feature_registry: &FeatureRegistry,
+    entity_registry: &EntityRegistry,
     annotations: &[crate::pipeline::RoomAnnotation],
 ) -> String {
     use std::collections::HashMap as OverlayMap;
@@ -136,7 +144,7 @@ pub fn render_ascii_annotated(
         }
     }
     for entity in &entities.entities {
-        let ch = entity_char(&entity.archetype);
+        let ch = entity_registry.ascii_char(&entity.archetype);
         overlay.insert(entity.position, ch);
     }
 
@@ -165,12 +173,16 @@ pub fn render_ascii_annotated(
     for ann in annotations {
         let label = ann.label.as_deref().unwrap_or("<unnamed>");
         let role = format!("{:?}", ann.role);
+        let tension = format!("{}", ann.tension);
         let flags = match (ann.is_entry, ann.is_goal) {
             (true, _) => " *",
             (_, true) => " !",
             _ => "",
         };
-        out.push_str(&format!("[{}] {} ({}){}", ann.letter, label, role, flags));
+        out.push_str(&format!(
+            "[{}] {} ({}) [{}]{}",
+            ann.letter, label, role, tension, flags
+        ));
         out.push('\n');
 
         // List named entities in this room.
@@ -330,7 +342,8 @@ mod tests {
         assert_eq!(entity_char(&EntityArchetypeId::from("gate_guardian")), 'G');
         assert_eq!(entity_char(&EntityArchetypeId::from("smuggler")), '@');
         assert_eq!(entity_char(&EntityArchetypeId::from("chest_mimic")), 'M');
-        assert_eq!(entity_char(&EntityArchetypeId::from("unknown_thing")), 'E');
+        // Unknown entities get '?' from the registry (not 'E' like the old substring matcher)
+        assert_eq!(entity_char(&EntityArchetypeId::from("unknown_thing")), '?');
     }
 
     #[test]

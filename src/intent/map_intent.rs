@@ -10,6 +10,8 @@ pub enum LocationKind {
     Cave,
     Outdoors,
     Sewer,
+    /// An urban environment (city streets, market district, town quarter)
+    Urban,
 }
 
 /// Rough scale of the map.

@@ -739,6 +739,7 @@ fn cellar_map_is_connected() {
 
 #[test]
 fn cellar_full_pipeline_produces_rats_and_nests() {
+    use procgen::entity::registry::EntityRegistry;
     use procgen::feature::registry::FeatureRegistry;
     use procgen::pipeline::{Pipeline, PipelineConfig};
     use procgen::tile::ascii::render_ascii;
@@ -772,12 +773,14 @@ fn cellar_full_pipeline_produces_rats_and_nests() {
     // ASCII output should contain rat ('r') and nest ('~') characters.
     let tile_registry = TileRegistry::default_registry();
     let feature_registry = FeatureRegistry::default_registry();
+    let entity_registry = EntityRegistry::default_registry();
     let ascii = render_ascii(
         &result.tiles,
         &result.features,
         &result.entities,
         &tile_registry,
         &feature_registry,
+        &entity_registry,
     );
     assert!(ascii.contains('r'), "ASCII should show rats");
     assert!(ascii.contains('~'), "ASCII should show rat nests");
@@ -1094,6 +1097,7 @@ fn cellar_annotations_have_entry_and_goal() {
 
 #[test]
 fn annotated_render_contains_letters_and_legend() {
+    use procgen::entity::registry::EntityRegistry;
     use procgen::feature::registry::FeatureRegistry;
     use procgen::pipeline::{Pipeline, PipelineConfig};
     use procgen::tile::ascii::render_ascii_annotated;
@@ -1109,12 +1113,14 @@ fn annotated_render_contains_letters_and_legend() {
 
     let tile_registry = TileRegistry::default_registry();
     let feature_registry = FeatureRegistry::default_registry();
+    let entity_registry = EntityRegistry::default_registry();
     let output = render_ascii_annotated(
         &result.tiles,
         &result.features,
         &result.entities,
         &tile_registry,
         &feature_registry,
+        &entity_registry,
         &result.annotations,
     );
 
@@ -1309,6 +1315,7 @@ fn additive_entity_rules_injection() {
         role_match: Some(NodeRole::Goal),
         archetype_match: None,
         tag_match: None,
+        tension_min: None,
     };
 
     let config = PipelineConfig {
@@ -1382,6 +1389,11 @@ mod stress_tests {
             Just(SpaceArchetype::Shaft),
             Just(SpaceArchetype::Courtyard),
             Just(SpaceArchetype::Workshop),
+            Just(SpaceArchetype::Plaza),
+            Just(SpaceArchetype::Street),
+            Just(SpaceArchetype::Alley),
+            Just(SpaceArchetype::Shop),
+            Just(SpaceArchetype::Warehouse),
         ]
     }
 
@@ -1450,6 +1462,8 @@ mod stress_tests {
                             label: Some(format!("space_{}", i)),
                             archetype: Some(archetype),
                             size_hint: SizeHint::Medium,
+                            max_connectors: None,
+                            connector_distribution: None,
                         }
                     })
                     .collect();
@@ -2257,6 +2271,11 @@ mod random_rules_tests {
             Just(SpaceArchetype::Shaft),
             Just(SpaceArchetype::Courtyard),
             Just(SpaceArchetype::Workshop),
+            Just(SpaceArchetype::Plaza),
+            Just(SpaceArchetype::Street),
+            Just(SpaceArchetype::Alley),
+            Just(SpaceArchetype::Shop),
+            Just(SpaceArchetype::Warehouse),
         ]
     }
 
@@ -2387,6 +2406,7 @@ mod random_rules_tests {
                         role_match,
                         archetype_match,
                         tag_match,
+                        tension_min: None,
                     }
                 },
             )

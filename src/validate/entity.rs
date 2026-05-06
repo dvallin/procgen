@@ -195,7 +195,7 @@ fn check_required_entities(
             continue;
         };
 
-        let matched = matching_entity_rules(&rules, spec);
+        let matched = matching_entity_rules(&rules, spec, None);
         let room_entities = plan.entities_in_space(placed.space_id);
 
         for rule in matched {
@@ -316,6 +316,8 @@ mod tests {
                 label: None,
                 archetype: Some(SpaceArchetype::Hall),
                 size_hint: SizeHint::Medium,
+                max_connectors: None,
+                connector_distribution: None,
             }],
             links: vec![],
             constraints: vec![],

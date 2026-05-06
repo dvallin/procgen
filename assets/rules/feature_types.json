@@ -124,5 +124,40 @@
     "ascii_char": "~",
     "blocking": false,
     "tags": ["vermin"]
+  },
+  {
+    "name": "mine_cart",
+    "category": "Furniture",
+    "ascii_char": "c",
+    "blocking": true,
+    "tags": ["mine", "industrial"]
+  },
+  {
+    "name": "ore_vein",
+    "category": "Interactable",
+    "ascii_char": "*",
+    "blocking": false,
+    "tags": ["mine", "valuable"]
+  },
+  {
+    "name": "support_beam",
+    "category": "Furniture",
+    "ascii_char": "H",
+    "blocking": true,
+    "tags": ["mine", "structural"]
+  },
+  {
+    "name": "pickaxe",
+    "category": "Interactable",
+    "ascii_char": "/",
+    "blocking": false,
+    "tags": ["mine", "tool"]
+  },
+  {
+    "name": "collapsed_timber",
+    "category": "Decoration",
+    "ascii_char": "%",
+    "blocking": true,
+    "tags": ["mine", "debris"]
   }
 ]

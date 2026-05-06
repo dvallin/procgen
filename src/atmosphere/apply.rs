@@ -226,6 +226,7 @@ fn sample_entities(
                     role_match: None,
                     archetype_match: None,
                     tag_match: None,
+                    tension_min: None,
                 });
             }
         }
@@ -267,6 +268,8 @@ mod tests {
             label: Some("test_room".into()),
             archetype: None,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

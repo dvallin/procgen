@@ -4,10 +4,13 @@
 //! paths between all door pairs. The union of these paths forms the
 //! `reserved_paths` set that must never be blocked by features or
 //! non-walkable scatter.
+//!
+//! Also provides [`compute_corridor_passthrough`] to detect corridor cells
+//! that route through a room's interior without entering via a door.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::geometry::geom::{Point, Rect};
+use crate::geometry::geom::{PlacedLink, Point, Rect};
 use crate::tile::map::TileMap;
 use crate::tile::registry::Tile;
 
@@ -142,6 +145,66 @@ fn point_in_rect(p: Point, rect: Rect) -> bool {
     p.x >= rect.x && p.x < rect.x + rect.w && p.y >= rect.y && p.y < rect.y + rect.h
 }
 
+/// Compute corridor cells that pass through a room's interior.
+///
+/// A corridor "passes through" a room when its carved floor cells land inside
+/// the room's rect but are NOT on the boundary (where doors live). These cells
+/// must be reserved to prevent blocking features or non-walkable scatter from
+/// severing corridor connectivity.
+///
+/// The `doors` list is used to avoid double-counting legitimate entry points.
+pub fn compute_corridor_passthrough(
+    rect: Rect,
+    links: &[PlacedLink],
+    doors: &[Point],
+) -> HashSet<Point> {
+    let door_set: HashSet<Point> = doors.iter().copied().collect();
+    let mut passthrough = HashSet::new();
+
+    for link in links {
+        for window in link.points.windows(2) {
+            let a = &window[0];
+            let b = &window[1];
+
+            // Generate all cells along this corridor segment.
+            let cells: Vec<Point> = if a.x == b.x {
+                let (from, to) = if a.y <= b.y { (a.y, b.y) } else { (b.y, a.y) };
+                (from..=to).map(|y| Point { x: a.x, y }).collect()
+            } else if a.y == b.y {
+                let (from, to) = if a.x <= b.x { (a.x, b.x) } else { (b.x, a.x) };
+                (from..=to).map(|x| Point { x, y: a.y }).collect()
+            } else {
+                continue; // Non-axis-aligned segments (shouldn't happen)
+            };
+
+            for cell in cells {
+                // Cell must be inside the rect (not outside).
+                if cell.x < rect.x
+                    || cell.x >= rect.x + rect.w
+                    || cell.y < rect.y
+                    || cell.y >= rect.y + rect.h
+                {
+                    continue;
+                }
+
+                // Skip boundary cells (those are where doors live).
+                if rect.point_on_boundary(&cell) {
+                    continue;
+                }
+
+                // Skip cells that are actual doors (legitimate entry points).
+                if door_set.contains(&cell) {
+                    continue;
+                }
+
+                passthrough.insert(cell);
+            }
+        }
+    }
+
+    passthrough
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +324,128 @@ mod tests {
         // 3 doors -> 3 pairs: (0,1), (0,2), (1,2)
         assert_eq!(intents.len(), 3);
         assert!(!reserved.is_empty());
+    }
+
+    // --- compute_corridor_passthrough tests ---
+
+    use crate::geometry::geom::{LinkKind, PlacedLink};
+
+    #[test]
+    fn corridor_passthrough_detects_vertical_segment_through_room() {
+        // Room at (0,0,7,7). Corridor passes through at x=3 from y=-5 to y=12.
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 7,
+            h: 7,
+        };
+        let links = vec![PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 3, y: -5 }, Point { x: 3, y: 12 }],
+        }];
+        let doors = vec![]; // No doors
+
+        let passthrough = compute_corridor_passthrough(rect, &links, &doors);
+
+        // Interior cells at x=3 are y=1..=5 (boundary is y=0 and y=6)
+        assert_eq!(passthrough.len(), 5);
+        for y in 1..=5 {
+            assert!(
+                passthrough.contains(&Point { x: 3, y }),
+                "expected (3, {}) in passthrough",
+                y
+            );
+        }
+    }
+
+    #[test]
+    fn corridor_passthrough_skips_boundary_cells() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 5,
+        };
+        let links = vec![PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 2, y: -1 }, Point { x: 2, y: 6 }],
+        }];
+        let doors = vec![];
+
+        let passthrough = compute_corridor_passthrough(rect, &links, &doors);
+
+        // Boundary cells (2,0) and (2,4) should NOT be in passthrough.
+        assert!(!passthrough.contains(&Point { x: 2, y: 0 }));
+        assert!(!passthrough.contains(&Point { x: 2, y: 4 }));
+        // Interior cells (2,1), (2,2), (2,3) should be.
+        assert_eq!(passthrough.len(), 3);
+    }
+
+    #[test]
+    fn corridor_passthrough_skips_doors() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 7,
+            h: 7,
+        };
+        let links = vec![PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 3, y: -2 }, Point { x: 3, y: 9 }],
+        }];
+        // Pretend (3,3) is a door inside the room
+        let doors = vec![Point { x: 3, y: 3 }];
+
+        let passthrough = compute_corridor_passthrough(rect, &links, &doors);
+
+        // (3,3) is a door — should not be in passthrough
+        assert!(!passthrough.contains(&Point { x: 3, y: 3 }));
+        // Other interior cells should be
+        assert!(passthrough.contains(&Point { x: 3, y: 1 }));
+        assert!(passthrough.contains(&Point { x: 3, y: 2 }));
+        assert!(passthrough.contains(&Point { x: 3, y: 4 }));
+        assert!(passthrough.contains(&Point { x: 3, y: 5 }));
+    }
+
+    #[test]
+    fn corridor_passthrough_horizontal_segment() {
+        let rect = Rect {
+            x: 5,
+            y: 5,
+            w: 7,
+            h: 7,
+        };
+        let links = vec![PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 2, y: 8 }, Point { x: 15, y: 8 }],
+        }];
+        let doors = vec![];
+
+        let passthrough = compute_corridor_passthrough(rect, &links, &doors);
+
+        // At y=8, interior x-range is 6..=10 (boundary at x=5 and x=11)
+        assert_eq!(passthrough.len(), 5);
+        for x in 6..=10 {
+            assert!(passthrough.contains(&Point { x, y: 8 }));
+        }
+    }
+
+    #[test]
+    fn corridor_passthrough_empty_when_no_overlap() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 5,
+        };
+        // Corridor outside the room entirely
+        let links = vec![PlacedLink {
+            kind: LinkKind::Normal,
+            points: vec![Point { x: 10, y: 0 }, Point { x: 10, y: 10 }],
+        }];
+        let doors = vec![];
+
+        let passthrough = compute_corridor_passthrough(rect, &links, &doors);
+        assert!(passthrough.is_empty());
     }
 }

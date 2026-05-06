@@ -203,16 +203,17 @@ GeometryPlanner (trait — public pipeline contract)
 
 **Goal:** Generate larger maps with narrative pacing — buildup, climax, release. Patterns compose into richer structures. The geometry layer scales gracefully to 10–15 rooms.
 
-| # | Task | Description |
-|---|---|---|
-| 5.1 | **Force-Directed Geometry Planner** | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `ColumnGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `ColumnGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
-| 5.2 | **Pattern Composition** | A slot in one pattern can be marked `expandable: true`. When the filler encounters an expandable slot (and budget permits), it runs `select_pattern` on a filtered pattern library to dynamically choose a sub-pattern — reusing the same situation-tag voting mechanism as top-level selection. The sub-pattern's graph is grafted into the parent (Entry node replaces the slot, internal edges/nodes merged with key namespacing). `MapScale` controls expansion budget: Tiny=0, Small=1, Medium=2, Large=3+. Composed patterns produce 8–15 node graphs. No hard-coded pattern IDs — new patterns become auto-eligible via their votes. |
-| 5.3 | **Entity Archetype Registry** | `assets/rules/entity_archetypes.json` defines entity archetypes: `{ id, display_char, difficulty_tier, behavior_tags, default_patrol }`. Tiers: `minion`, `standard`, `elite`, `boss`. The entity planner references archetypes by ID; the registry resolves display char and tier. Provides the variety needed for difficulty scaling. Existing `entities.json` rules reference these IDs (backward-compatible). |
-| 5.4 | **Pacing Curve** | Assign tension scores to rooms by graph distance from Entry along the critical path. Tag rooms with `tension: low/medium/high/climax`. Tension is a computed property on `RoomAnnotation`, not a tag — it's structural, not content. Critical path = shortest Entry→Goal path in the structural graph. |
-| 5.5 | **Tension-aware entity density** | Entity rules gain `match_tension: Option<TensionLevel>`. High-tension rooms get more/harder entities (higher tier). Low-tension rooms stay sparse (minions only). Atmosphere profiles can also reference tension for scatter intensity (more rubble near climax). |
-| 5.6 | **Rest points** | If critical path length > N, insert a `Reward`-role room mid-path (safe, contains supplies). Pattern-level insertion during composition. Rest points get `tension: low` regardless of depth. |
-| 5.7 | **Pacing validator** | Warns if the tension curve is flat (no buildup), immediately maxed (unfair), or has no climax before the goal. Reports via `PipelineResult.annotations` so the world engine can react. |
-| 5.8 | **New Scenario: Abandoned Mine** | Medium-scale (10–15 rooms). Main shaft (linear descent) + branching galleries (hub-and-spoke at depth). Tests pattern composition + force-directed layout + pacing over a longer path. New vocabulary `abandoned_mine`. |
+| # | Task | Status | Description |
+|---|---|---|---|
+| 5.1 | **Force-Directed Geometry Planner** | ✅ | Replace the BFS column layout (`ColumnGeometryPlanner`, renamed from `ColumnGeometryPlanner`) with a force-directed alternative (`ForceDirectedGeometryPlanner`). Nodes attract along graph edges, repel non-adjacent nodes, avoid overlap. Produces more natural spatial relationships for larger room counts. Both implementations stay available behind the `GeometryPlanner` trait; `PipelineConfig` selects which one to use. Rename `ColumnGeometryPlanner` → `ColumnGeometryPlanner` to clarify what it actually does. |
+| 5.2 | **Pattern Composition** | ✅ | `PatternSlot` gains `expandable: bool`; `NarrativePattern` gains `expansion_votes: Vec<ExpansionVote>` for role-affinity scoring. When the filler encounters an expandable slot (budget permitting), it runs `select_pattern` on a filtered pattern library — reusing the same voting mechanism as top-level selection, plus expansion vote bonuses. Sub-pattern graph is grafted into the parent (Entry node replaces the slot, internal edges/nodes merged with key namespacing e.g. `branch_a.hub`). Budget controlled via `PipelineConfig.expansion_budget` or `SituationContext.bindings["expansion_budget"]`; default 0 (backward-compatible). Cave demo uses budget=1, producing 8–12 room sprawling maps. New `src/intent/compose.rs` module with `fill_pattern_composed`, `CompositionContext`, `graft_subgraph`. No hard-coded pattern IDs — new patterns become auto-eligible via their votes. |
+| 5.3 | **Entity Archetype Registry** | ✅ | `EntityCategory` enum (`Creature`, `NPC`, `Hazard`, `Boss`) + `EntityProperties` struct + `EntityRegistry` (HashMap-based, mirrors `FeatureRegistry`). 11 built-in entity types defined in `assets/rules/entity_types.json` with embedded fallback. Hardcoded `entity_char()` substring matching replaced by registry lookups. ASCII render functions accept `&EntityRegistry`. `PipelineConfig.entity_registry` for overrides. |
+| 5.4 | **Pacing Curve** | ✅ | `TensionLevel` enum (`Low`, `Medium`, `High`, `Climax`) assigned per room by BFS distance from Entry normalized against critical path (shortest Entry→Goal). `RoomAnnotation.tension` computed automatically. Goal rooms always `Climax`, Entry/Reward always `Low`. Visible in `--annotate` legend and `--trace debug` output. New `src/tension.rs` module with `compute_tension()` + 7 unit tests. |
+| 5.5 | **Tension-aware entity density** | ✅ | `TensionLevel` gains `Ord` + `density_multiplier()` (Low=0.5×, Medium=1.0×, High=1.5×, Climax=2.0×). `EntityRule.tension_min: Option<TensionLevel>` gates rules by minimum room tension. Entity planner scales density cap by multiplier and filters rules by tension. 4 structural entity rules gated at Medium/High; quest-critical rules bypass tension. |
+| 5.6 | **ANSI Colored Rendering** | ✅ | `src/tile/color.rs` module adds colored ASCII output. Entities by danger, features by importance, tiles by type. CLI `--color` flag (`auto`/`on`/`off`). Zero dependencies (raw ANSI codes). |
+| 5.7 | **Rest Points & Seed Reporting** | ✅ | Role-based tension caps: Transition capped at Medium, Hub capped at High. Sub-pattern Entry nodes converted to Transition during grafting. **Rest point insertion** (`rest_points.rs`): post-composition, if critical path > 5 edges and no natural Low room mid-path, a Transition node with `rest_point` tag is inserted by splitting a Traversal edge near the midpoint. Tension forces `rest_point`-tagged rooms to Low. `PipelineResult.seed: u64` stores actual seed. CLI prints `(seed: N)`. 6 rest_points tests + 4 tension tests. |
+| 5.8 | **Pacing validator** | ✅ | `PacingValidator` checks tension curve for degenerate patterns: flat curve (all same), no climax (no peak), immediate climax (too abrupt), no rest in long path. Produces Warnings/Infos only (never Errors). `PipelineResult.pacing_warnings: Vec<String>` carries issues. CLI prints ⚠ when present. 8 unit tests. |
+| 5.9 | **New Scenario: Abandoned Mine** | | Medium-scale (10–15 rooms). Main shaft (linear descent) + branching galleries (hub-and-spoke at depth). Tests pattern composition + force-directed layout + pacing over a longer path. New vocabulary `abandoned_mine`. |
 
 **Design notes:**
 - 5.1 comes first because pattern composition (5.2) will produce 10–15 room graphs that the BFS column layout handles poorly. Better to have a solid geometry foundation before scaling up room count.
@@ -222,15 +223,15 @@ GeometryPlanner (trait — public pipeline contract)
 **Exit criterion:** Medium-scale maps (10–15 rooms) have natural spatial layouts via force-directed placement, measurable pacing curves visible in `--trace` output, and tension-appropriate entity populations. Pacing validator catches degenerate structures.
 
 **5.2 subtasks:**
-| # | Subtask | Description |
-|---|---------|-------------|
-| 5.2.1 | Data model: `expandable` on `PatternSlot` | Add `expandable: bool` (serde default false) to `PatternSlot`. Add optional `expansion_votes: Vec<ExpansionVote>` to `NarrativePattern` — each entry is `{ parent_role: NodeRole, weight: i32 }` giving the pattern affinity for expanding slots of that role. |
-| 5.2.2 | `PipelineConfig.expansion_budget` | Add `expansion_budget: Option<u32>` to `PipelineConfig`. When `None`, derive from `MapScale` (Tiny=0, Small=1, Medium=2, Large=3, Huge=4). Allow override from `SituationContext.bindings["expansion_budget"]`. |
-| 5.2.3 | Composition logic in filler | Extend `fill_pattern` to accept `&[NarrativePattern]` (full library) + `expansion_budget: u32`. For expandable slots: (a) budget>0 check, (b) RNG inclusion roll, (c) filter library (exclude self, exclude patterns with required slots > remaining budget), (d) run `select_pattern` on filtered set (with expansion_votes as bonus), (e) recursively fill sub-pattern (decrement budget), (f) graft sub-graph into parent. |
-| 5.2.4 | Graph grafting helper | `graft_subgraph(parent_nodes, parent_edges, slot_key, sub_graph, next_id)` — merges sub-pattern nodes (with key namespacing: `slot_key.sub_key`), rewires parent edges pointing at slot to sub-pattern's Entry node, re-numbers node IDs for uniqueness. |
-| 5.2.5 | Wire into `GenericIntentBuilder` | Pass pattern library + budget to the filler. Budget derived from config or scale. |
-| 5.2.6 | Annotate `narrative.json` | Mark selected slots as `expandable: true` in existing patterns: `branching_exploration.branch_a`, `branching_exploration.branch_b`, `hub_and_spoke.spoke_1`, `lock_and_key.key_area`. Optionally add `expansion_votes` to patterns (e.g., `linear_descent` gets `[{ parent_role: "Branch", weight: 2 }]`). |
-| 5.2.7 | Tests | Unit: expandable deserializes, budget=0 prevents expansion, budget=1 expands one slot, composed graph edges valid, key namespacing correct. Proptest: any expandable pattern + vocabulary produces connected graph with valid edges. Integration: medium-scale situation produces 8–15 room graph. |
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 5.2.1 | Data model: `expandable` on `PatternSlot` | ✅ | Add `expandable: bool` (serde default false) to `PatternSlot`. Add optional `expansion_votes: Vec<ExpansionVote>` to `NarrativePattern` — each entry is `{ parent_role: NodeRole, weight: i32 }` giving the pattern affinity for expanding slots of that role. |
+| 5.2.2 | `PipelineConfig.expansion_budget` | ✅ | Add `expansion_budget: Option<u32>` to `PipelineConfig`. When `None`, derive from `MapScale` (Tiny=0, Small=1, Medium=2, Large=3, Huge=4). Allow override from `SituationContext.bindings["expansion_budget"]`. |
+| 5.2.3 | Composition logic in filler | ✅ | Extend `fill_pattern` to accept `&[NarrativePattern]` (full library) + `expansion_budget: u32`. For expandable slots: (a) budget>0 check, (b) RNG inclusion roll, (c) filter library (exclude self, exclude patterns with required slots > remaining budget), (d) run `select_pattern` on filtered set (with expansion_votes as bonus), (e) recursively fill sub-pattern (decrement budget), (f) graft sub-graph into parent. |
+| 5.2.4 | Graph grafting helper | ✅ | `graft_subgraph(parent_nodes, parent_edges, slot_key, sub_graph, next_id)` — merges sub-pattern nodes (with key namespacing: `slot_key.sub_key`), rewires parent edges pointing at slot to sub-pattern's Entry node, re-numbers node IDs for uniqueness. |
+| 5.2.5 | Wire into `GenericIntentBuilder` | ✅ | Pass pattern library + budget to the filler. Budget derived from config or scale. |
+| 5.2.6 | Annotate `narrative.json` | ✅ | Mark selected slots as `expandable: true` in existing patterns: `branching_exploration.branch_a`, `branching_exploration.branch_b`, `hub_and_spoke.spoke_1`, `lock_and_key.key_area`. Optionally add `expansion_votes` to patterns (e.g., `linear_descent` gets `[{ parent_role: "Branch", weight: 2 }]`). |
+| 5.2.7 | Tests | ✅ | Unit: expandable deserializes, budget=0 prevents expansion, budget=1 expands one slot, composed graph edges valid, key namespacing correct. Proptest: any expandable pattern + vocabulary produces connected graph with valid edges. Integration: medium-scale situation produces 8–15 room graph. |
 
 **5.2 design decisions:**
 - **Voting over hard-coded IDs.** Sub-pattern selection reuses `select_pattern` — situation tags guide composition contextually. Adding a new pattern to the library automatically makes it eligible for expansion without editing existing patterns.
@@ -239,22 +240,276 @@ GeometryPlanner (trait — public pipeline contract)
 - **Key namespacing preserves traceability.** A node `branch_a.hub.gate` tells you exactly where it came from in the composition tree. Annotations and debugging benefit from this.
 - **Downstream is transparent.** The composed `ScenarioGraph` looks like any other graph to spatial/geometry/tile layers. No changes needed downstream — force-directed layout (5.1) handles the larger node counts.
 
+**5.3 subtasks:**
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 5.3.1 | `EntityCategory` enum | ✅ | `Creature`, `NPC`, `Hazard`, `Boss` — fixed enum for behavior dispatch (same pattern as `FeatureCategory`). |
+| 5.3.2 | `EntityProperties` struct | ✅ | `name`, `category: EntityCategory`, `ascii_char: char`, `blocking: bool`, `tags: Vec<Tag>` — serde-serializable. |
+| 5.3.3 | `EntityRegistry` struct | ✅ | `HashMap<String, EntityProperties>` with `default_registry()` (11 built-in types), `from_properties()`, `register()`, `get()`, `category()`, `ascii_char()`, `is_blocking()`, `len()`, `is_empty()`. |
+| 5.3.4 | JSON asset `entity_types.json` | ✅ | `assets/rules/entity_types.json` — 11 entity archetypes (rat, tavern_rat, giant_rat, skeleton, skeleton_guardian, gate_guardian, chest_mimic, smuggler, bat, cave_spider, trap_mimic). Embedded fallback via `include_str!`. |
+| 5.3.5 | Asset loader integration | ✅ | `EMBEDDED_ENTITY_REGISTRY`, `DEFAULT_ENTITY_REGISTRY_PATH`, `load_default_entity_registry()` in `asset/load.rs`. |
+| 5.3.6 | Replace hardcoded `entity_char()` | ✅ | `ascii.rs` render functions accept `&EntityRegistry`. `entity_char()` delegates to `EntityRegistry::default_registry().ascii_char()`. Old substring matching removed. |
+| 5.3.7 | `PipelineConfig.entity_registry` | ✅ | Optional override field (same pattern as `tile_registry` / `feature_registry`). |
+| 5.3.8 | Tests | ✅ | 6 unit tests in `entity/registry.rs`, 1 asset loader test, existing ASCII render tests updated. All 425 tests green. |
+
+**5.3 design decisions:**
+- **HashMap-based (not index-based).** Unlike tiles (which need dense `u16` IDs for the tilemap), entities are looked up by string name. HashMap mirrors `FeatureRegistry` pattern.
+- **Default char is `'?'` not `'E'`.** Unknown archetypes render as `?` — makes it obvious when an entity is missing from the registry, rather than silently rendering a generic placeholder.
+- **`giant_rat` gets `'R'` (uppercase).** Distinguishes boss-tier entities visually in ASCII output.
+- **New entities (bat, cave_spider) get dedicated chars.** `'b'` and `'x'` respectively — previously they fell through to the generic `'E'` in the old substring matcher.
+
+**5.4 subtasks:**
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 5.4.1 | `TensionLevel` enum | ✅ | `Low`, `Medium`, `High`, `Climax` with `Display` impl. Lives in `src/tension.rs`. |
+| 5.4.2 | `compute_tension()` function | ✅ | Takes `&SpatialPlan`, returns `HashMap<SpaceId, TensionLevel>`. BFS from Entry, finds critical path (Entry→Goal), normalizes depth. Overrides: Goal→Climax, Entry→Low, Reward→Low. Thresholds: ≤0.25 Low, ≤0.60 Medium, ≤0.90 High, >0.90 Climax. |
+| 5.4.3 | `RoomAnnotation.tension` field | ✅ | Added to `RoomAnnotation` struct. Computed in `build_annotations` via `compute_tension()`. |
+| 5.4.4 | Annotated legend shows tension | ✅ | Format: `[A] Room Name (Role) [Tension] *`. Visible with `cargo run -- --annotate`. |
+| 5.4.5 | Trace logging | ✅ | `--trace debug` logs each room's assigned tension level. |
+| 5.4.6 | Unit tests | ✅ | 7 tests: linear path, short path, reward override, branch off critical path, no-goal fallback, display formatting, long gradual buildup. |
+
+**5.4 design decisions:**
+- **BFS distance, not path-following.** BFS gives the shortest distance from entry to each room regardless of the specific path taken. This handles branching naturally — a branch at depth 2 in a 4-deep graph gets Medium tension even though it's off the main line.
+- **Critical path = Entry→Goal shortest path.** Not longest path (which would be confusing for players). The critical path is what a player would traverse if they went straight for the goal.
+- **Reward rooms override to Low.** These are rest points by design. Even if they're at depth 3/4 of the critical path, they should feel safe.
+- **No-goal fallback uses max BFS depth.** If there's no Goal room, the system still produces a gradual buildup across the map.
+- **Tension is computed, not authored.** It's a structural property derived from graph topology, not a tag that content authors set. This means it stays correct even when pattern composition changes the graph shape.
+
+**5.5 subtasks:**
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 5.5.1 | `TensionLevel` gains `Ord` + `density_multiplier()` | ✅ | `PartialOrd`/`Ord` derived (Low < Medium < High < Climax). `density_multiplier()` returns 0.5/1.0/1.5/2.0. `Serialize`/`Deserialize` added. |
+| 5.5.2 | `EntityRule.tension_min` field | ✅ | Optional `TensionLevel` (serde default None). Rule only fires in rooms at or above that tension level. `tension_allows()` helper method. |
+| 5.5.3 | `matching_entity_rules` accepts tension | ✅ | Third parameter `Option<TensionLevel>` filters rules by tension. All callers updated. |
+| 5.5.4 | Entity planner computes tension + scales density | ✅ | `SimpleEntityPlanner` calls `compute_tension(spatial)`, filters rules by room tension, scales `density_cap` by `tension.density_multiplier()`. Low-tension rooms get 0.5× entities; climax rooms get 2×. |
+| 5.5.5 | Updated `entities.json` with tension gates | ✅ | Skeleton rules gated at Medium/High, bat/cave_spider at Medium/High, chest_mimic at Medium. Quest-critical entities (gate_guardian, skeleton_guardian) have no tension gate. 4 new rules added (total: 8). |
+| 5.5.6 | Trace logging includes tension | ✅ | `--trace debug` shows room tension level in entity rule matching logs. |
+| 5.5.7 | Tests | ✅ | 4 new planner tests (density scaling math, low-tension caps, high-tension allows more, tension_min filtering) + 5 new rule tests (tension_allows, serde round-trip, matching with tension). All 443 tests green. |
+
+**5.5 design decisions:**
+- **Density scaling via multiplier, not hard caps.** The base density cap (walkable_tiles/4) is multiplied by the tension level's multiplier. This means larger rooms still benefit from higher tension (more entities), while small rooms at low tension might only allow 1 entity.
+- **`tension_min` is on the rule, not the entity type.** The same entity archetype (e.g. skeleton) can appear at different tension levels via different rules with different `tension_min` values. This allows "a few skeletons at Medium, extra aggressive skeletons at High."
+- **Quest-critical entities bypass tension.** Gate guardians and goal guardians have no `tension_min` — they must appear regardless of where they fall on the pacing curve. The tension system scales *ambient* threat, not *structural* encounters.
+- **Atmosphere per-room rules also respect tension.** When the atmosphere system injects entity rules for a specific room, those rules are also filtered by the room's tension level. This prevents atmosphere-driven rats from appearing in low-tension safe areas.
+- **Minimum density cap is always 1.** Even at Low tension (0.5× multiplier), if a required entity needs placement, it can always fit.
+
 ---
 
-### Phase 6: Algorithmic Depth (scenario-driven)
+### Phase 6: Urban Districts & Multi-Connector Spaces
 
-**Goal:** Improve generation quality at individual layers, motivated by concrete scenario needs.
+**Goal:** Generate urban outdoor environments (streets, plazas, buildings) using the existing room-based architecture. The geometry layer gains alignment, multi-connector support, and edge zones. Streets become content-bearing navigational backbones, not just decorated corridors.
 
-| Scenario Need | Layer | Approach |
-|---|---|---|
-| Corridors are monotonous | Routing | A* with cost maps; wider corridors for Hall connections |
-| No encounter design | Entities | Encounter budgets per room (difficulty ≤ tension × budget) |
-| Can't detect boring maps | Validation | Branching factor check, dead-end density, reachability analysis |
-| Tower needs vertical movement | Geometry | Multi-level support: `PlacedSpace` gains `z_level`, stairwell routing |
-| Feature groups feel isolated | Features | Template composition: sub-templates that reference each other (altar *with* candles *with* offering bowl) |
-| Motifs need world-level coherence | Pipeline | Motif propagation across rooms: a flooded canal motif marks rooms along a line, not just individual spaces |
+**The topological inversion:**
+```
+Dungeon:  NODES (rooms) are the content.   EDGES (corridors) are disposable glue.
+Urban:    EDGES (streets) are the backbone. NODES (buildings) hang off them.
+```
 
-**Priority is driven by which new scenario needs it.** No algorithm work happens without a scenario that exercises it.
+This is the fundamental shift. In a dungeon, you build rooms and connect them with corridors. In a district, you build streets and attach buildings to them. If you treat streets like "corridors but wider" you get decorated hallways pretending to be a city. Streets are high-branching, wide, content-heavy, and the navigational backbone — the opposite of dungeon corridors in every dimension except "connects two places."
+
+**Key insight:** Narrative patterns still describe *why* you go places (story). Vocabulary describes *what* those places are (theme). Geometry describes *how* they're arranged (space). But in urban contexts, edges carry as much or more weight than nodes. Streets are **edges by default, nodes when promoted** — a quiet connector street is routing; an ambush street / checkpoint street / market chaos street is a `Transition` node with `archetype: Street`.
+
+**The hierarchy emerges from existing layers:**
+- **Vocabulary** says "Hub = Market Plaza" (gives the archetype)
+- **Geometry** says "Plaza needs street connections, buildings align to streets" (spatial arrangement)
+- **Composition** says "Goal(Warehouse) expands into interior rooms" (adds depth via 5.2)
+- **Atmosphere** says "streets are busy" (populates routing and edge zones with content)
+
+| # | Task | Status | Description |
+|---|---|---|---|
+| 6.1 | **Urban Space Archetypes & Edge Zones** | ✅ | New `SpaceArchetype` variants: `Plaza`, `Street`, `Alley`, `Shop`, `Warehouse`. `LocationKind::Urban` added. Extend the zone system with **edge zones** — spaces gain a periphery (`EdgeZone`) separate from interior. Streets: center zone (walkable path) + edge zones (where buildings attach, stalls spawn). Plazas: center open + edges populated. This makes feature placement and alignment saner than trying to scatter into a raw rect. |
+| 6.2 | **Multi-Connector Routing & Distribution** | ✅ | Spaces can have N>2 doors. `SpaceSpec` gains `max_connectors: Option<u32>` and `connector_distribution: ConnectorDistribution`. Distribution enum: `Uniform` (evenly spaced along wall), `Clustered` (grouped at center), `GridAligned` (snapped to regular intervals), `Ends` (only at short sides — for street endpoints). Without distribution, you get "6 doors randomly slapped onto a wall" which looks like a panic attack, not a street. |
+| 6.3 | **Alignment-Aware Geometry** | ✅ | Stronger constraints than just `FacesSpace`. New spatial constraints: `AlignEdge { a, b, side }` (building B's front wall aligns to street A's long edge), `AttachToEdge { building, street, side }` (building connects to a specific side of the street), `PreferOrientation { space, axis }` (streets prefer straight axes, plazas anchor intersections). Force-directed planner gains orientation forces, **but** a dedicated `StreetSkeletonPlanner` places streets first as axis-aligned backbone, then attaches buildings. Force-directed alone will fail at producing readable urban layouts. |
+
+**6.3 Subtasks:**
+
+| # | Subtask | Status | Description |
+|---|---------|--------|-------------|
+| 6.3.1 | **New `SpatialConstraint` variants** | ✅ | Add `AlignSide` enum (`North`, `South`, `East`, `West`), `Axis` enum (`Horizontal`, `Vertical`), and three new `SpatialConstraint` variants: `AlignEdge { a, b, side }` (space B's front wall aligns to space A's long edge), `AttachToEdge { building, street, side }` (building connects to a specific side of the street — implies adjacency + door placement), `PreferOrientation { space, axis }` (space should be elongated along the given axis). |
+| 6.3.2 | **Automatic urban constraint inference** | ✅ | Extend spatial planner with `derive_urban_constraints()`: when `LocationKind::Urban`, auto-generate `PreferOrientation` for Street/Alley archetypes, `AttachToEdge` for Shop/Warehouse nodes linked to Street/Plaza nodes, `AlignEdge` for building-archetype nodes sharing a link with a street. |
+| 6.3.3 | **`StreetSkeletonPlanner`** | ✅ | New `GeometryPlanner` impl in `src/geometry/street_skeleton.rs`. Algorithm: (1) partition spaces into backbone (Street/Alley/Plaza) vs attached (Shop/Warehouse/Chamber/etc), (2) place backbone first as axis-aligned rects (streets elongated, plazas square, at intersections), (3) attach buildings flush against backbone edges respecting `AttachToEdge`/`AlignEdge`, (4) resolve overlaps, (5) route with `ZShapeRouter`. |
+| 6.3.4 | **`GeometryStrategy::StreetSkeleton` variant** | ✅ | Add new variant to `GeometryStrategy`. Wire into `Pipeline::plan_geometry_with_retries`. Add `--layout street` CLI option. Auto-select for `LocationKind::Urban` unless explicitly overridden. |
+| 6.3.5 | **Orientation forces in force-directed planner** | ✅ | Extend `ForceDirectedGeometryPlanner` snap-to-grid: when a space has `PreferOrientation`, ensure its dimensions are oriented correctly (swap w/h if needed). Makes force-directed planner urban-aware as fallback. |
+| 6.3.6 | **Unit tests** | ✅ | Tests: `AlignEdge` places building flush against street side; `AttachToEdge` produces door on correct face; `PreferOrientation` ensures correct elongation axis; `StreetSkeletonPlanner` produces valid non-overlapping layout for street+buildings graph; T-junction (plaza+3 streets); regression (existing scenarios unchanged). |
+
+**6.3 New/Modified Files:**
+- `src/spatial/plan.rs` — `AlignSide`, `Axis` enums; 3 new `SpatialConstraint` variants
+- `src/spatial/planner.rs` — `derive_urban_constraints()` helper
+- `src/geometry/street_skeleton.rs` — **new** `StreetSkeletonPlanner`
+- `src/geometry/mod.rs` — `pub mod street_skeleton;`
+- `src/geometry/force_directed.rs` — orientation-aware snap-to-grid
+- `src/pipeline.rs` — `GeometryStrategy::StreetSkeleton`; auto-select for urban
+- `src/main.rs` — `Layout::Street` CLI variant
+
+**6.3 Acceptance Criteria:**
+- A test urban `SpatialPlan` (1 plaza + 2 streets + 4 shops) produces non-overlapping `GeometryPlan` with buildings flush against street edges.
+- Streets are axis-aligned (not diagonal/rotated).
+- Buildings' connector (door) faces the street they're attached to.
+- Existing demo scenarios produce identical results (regression).
+- `cargo test` passes (all existing tests + new 6.3 tests).
+| 6.4 | **Street Rasterization** | | Streets produce elongated footprints with implicit boundaries (not hard walls — edge zones define where the street ends and buildings begin). New tile: `Cobblestone`. Sidewalk zones (optional edge softness). Open ends connect to intersections. Connectors distributed along long sides via 6.2. T-junctions and crossroads emerge from multi-street intersections handled by the router. |
+| 6.5 | **Buildings: Expansions + Facades** | | Two building modes: (a) **Expansion** — quest-relevant buildings expand via 5.2 composition into multi-room interiors (sub-pattern's Entry = street-facing door). (b) **Facade** — lightweight non-quest buildings as nodes with connector + exterior only (no interior, no expansion). Keeps street density believable without complexity explosion. Without facades, you get empty streets with one important door. `ExitMarker` on expansion slots signals "leads to another map" for large buildings. |
+| 6.6 | **Urban Narrative Patterns** | | New story patterns for urban pacing: `urban_heist` (safehouse→market→fence→checkpoint→warehouse), `investigation` (crime scene→witnesses→suspect locations→confrontation), `chase` (origin→street→alley→rooftops→dead end). Streets appear as `Transition` nodes when they're gameplay-relevant (ambush, checkpoint, chase). Quiet connector streets stay as edges (routing). |
+| 6.7 | **Urban Content Rules** | | New feature types: `street_lamp`, `market_stall`, `well`, `signpost`, `cart`, `crate_stack`. Entity rules: `guard` (patrol on streets), `merchant` (near stalls in edge zones), `beggar` (alleys). Atmosphere profiles: `busy_market`, `seedy_docks`, `quiet_residential`. `PlacementStrategy::AlongAxis` for linear spaces. `PlacementStrategy::InEdgeZone` for periphery content. |
+| 6.8 | **Motif Propagation** | | Motifs gain spatial spread: a motif placed on one node propagates along edges with decay. `MotifField { source_role, decay_per_hop, leak_probability }`. Atmosphere profiles already react to tags — this adds tag *propagation* before profile matching. Enables "rat infestation spreading from warehouse along dock streets, leaking into adjacent basements." |
+| 6.9 | **New Scenario: Port District** | | Streets + docks + warehouses + tavern. Tests: multi-connector streets (5+ doors with uniform distribution), building expansion + facade density, street features in edge zones, alignment (buildings face streets). Motif: rat infestation originating from warehouse, spreading along dock streets. `PinEntity { "Rat King", target: Goal }`. 15–25 spaces total. |
+
+**Implementation Strategy: Street-Skeleton-First with Frontage Parcels**
+
+The core algorithm — minimal convincing urban generation in one sentence: *use a street-skeleton-first generator with frontage zones, parcel subdivision, and building facades/interior expansion.* This produces readable urban form without needing full city simulation.
+
+**Pipeline:**
+```
+place_anchors → build_street_skeleton → realize_streets → compute_frontage_zones → subdivide_parcels → assign_use → place_buildings → UrbanPlan → GeometryPlan
+```
+
+**Step 1 — Place Anchors.** Anchors are *reasons for streets to exist*: entry gate, market plaza, dock, warehouse, tavern, checkpoint, goal building, side alley exit. Each anchor has a kind, weight, and optional zone hint (e.g. plaza near center, docks on water edge, warehouse near docks). This drives the skeleton — streets don't exist arbitrarily, they connect motivating places.
+
+```rust
+struct UrbanAnchor {
+    id: AnchorId,
+    kind: AnchorKind,
+    weight: f32,
+    preferred_zone: Option<ZoneHint>,
+}
+```
+
+**Step 2 — Generate Street Skeleton.** An axis-aligned graph connecting anchors. Start simple: main street (entry → plaza → docks), side street (plaza → warehouse), alley (tavern → back route → goal). This is intentionally not fancy — connectivity and hierarchy matter more than organic curves at this stage.
+
+```rust
+fn build_street_skeleton(anchors: &[UrbanAnchor], rng: &mut Rng) -> StreetGraph {
+    let mut graph = StreetGraph::new();
+    // Main spine: entry → plaza → docks
+    graph.add_street(entry, plaza, StreetKind::Main);
+    graph.add_street(plaza, docks, StreetKind::Main);
+    // Side streets to important non-main anchors
+    for important in important_non_main_anchors() {
+        graph.add_street(plaza, important, StreetKind::Side);
+    }
+    // Optional alleys for alternative routing
+    add_optional_alleys(&mut graph, rng);
+    graph
+}
+```
+
+**Step 3 — Realize Streets as Width-Bearing Segments.** Each skeleton edge becomes a wide rectangle with kind-dependent width:
+- Main street: 5–7 tiles
+- Side street: 3–5 tiles
+- Alley: 1–2 tiles
+
+Rasterization: center = walkable cobblestone, edges = sidewalk / frontage zones.
+
+```rust
+struct StreetSegment {
+    from: Point,
+    to: Point,
+    width: i32,
+    kind: StreetKind,
+}
+```
+
+**Step 4 — Compute Frontage Zones.** For each street segment, compute buildable strips along both sides. This is the *secret sauce* — frontage zones are where buildings attach, facing the street.
+
+```
+████ buildings
+.... edge zone / sidewalk
+==== street center
+.... edge zone / sidewalk
+████ buildings
+```
+
+```rust
+struct FrontageZone {
+    street_id: StreetId,
+    side: Side,
+    rect: Rect,
+    allowed_uses: Vec<BuildingUse>,
+}
+```
+
+**Step 5 — Subdivide Frontage into Parcels.** Take each frontage strip and split into lots (width 4–9 tiles). This produces believable urban rhythm — irregular but coherent lot widths. Crucially: parcels *face the street*, so doors go on the frontage side and buildings align automatically.
+
+```rust
+fn subdivide_frontage(zone: &FrontageZone, rng: &mut Rng) -> Vec<Parcel> {
+    let mut parcels = Vec::new();
+    let mut cursor = zone.start();
+    while cursor < zone.end() {
+        let width = rng.range(4..9);
+        parcels.push(Parcel {
+            frontage: Rect::from_cursor(cursor, width, zone.depth),
+            street_id: zone.street_id,
+            side: zone.side,
+        });
+        cursor += width;
+    }
+    parcels
+}
+```
+
+**Step 6 — Assign Parcel Use.** Context-driven: near plaza → shops, tavern, market stalls; near docks → warehouse, storage, cheap tavern; side alleys → residences, shady doors; goal parcel → quest building. Uses weighted picking based on proximity to anchors.
+
+**Step 7 — Place Buildings.** Each parcel becomes either a **facade** (1–3 tiles deep, door on street side, no interior) or an **expanded interior** (parcel footprint becomes building shell, inside runs existing room composition / pattern expansion via 5.2). Door alignment is trivial because the parcel knows its street-facing edge.
+
+**What makes it convincing:** Not randomness — *alignment and frontage.* Streets first, buildings facing streets, doors on frontage, plazas at intersections, shops near plazas, warehouses near docks, alleys thinner and less regular, background facades for density, important buildings expanded into interiors.
+
+**Minimal starting scope:**
+1. One main street
+2. One plaza
+3. One dock/warehouse branch
+4. Frontage parcels
+5. Facade buildings
+6. One expanded quest building
+
+Everything else (motif propagation, chase sequences, complex narrative patterns) layers on top of this foundation.
+
+**How this maps to tasks:**
+- Steps 1–2 implement task 6.3 (StreetSkeletonPlanner + anchor placement)
+- Step 3 implements task 6.4 (street rasterization with width hierarchy)
+- Step 4 implements task 6.1 (edge zones = frontage zones)
+- Step 5 is new machinery — parcel subdivision produces the "urban rhythm" that makes districts convincing
+- Step 6 connects to task 6.7 (content rules) and atmosphere profiles
+- Step 7 implements task 6.5 (expansion + facades), with connector distribution (6.2) governing door placement along frontage
+
+---
+
+**Design decisions:**
+- **Topological inversion is real but doesn't require new abstractions.** Streets as `Transition` nodes + rich routing = the same graph model, different spatial weight. The geometry planner treats streets as primary layout elements (placed first), buildings as secondary (attached after).
+- **Streets are edges by default, nodes when promoted.** Quiet connector streets are routing (corridor equivalent). Important gameplay streets (ambush, checkpoint, market chaos, chase sequence) are `Transition` nodes with `archetype: Street`. No new type needed.
+- **Connector distribution prevents visual chaos.** `max_connectors` alone is necessary but insufficient. Without `ConnectorDistribution` you get doors slapped randomly. With it, streets have evenly-spaced building entrances, plazas have clustered access points, alleys have connectors only at ends.
+- **Alignment needs more than force-directed.** `FacesSpace` is a start, but buildings lining up along streets requires explicit axis constraints (`AlignEdge`, `AttachToEdge`, `PreferOrientation`). A `StreetSkeletonPlanner` places streets first as axis-aligned bones, then force-directed attaches buildings. Pure force-directed will produce organic-looking mess, not readable urban grid.
+- **Edge zones make feature placement sane.** Without them, you're scattering features into a raw rect and hoping they look like a street market. With center/edge zone distinction, stalls go in edge zones, the path stays clear, buildings attach at the periphery.
+- **Facades for density.** If only quest buildings are nodes, streets feel empty. Lightweight facade nodes (connector + exterior wall, no interior) provide visual density without expansion cost. A facade is a 1-cell-deep wall with a door that goes nowhere (or leads to ExitMarker for future maps).
+- **Building interiors reuse 5.2 composition.** A `Goal(Warehouse)` slot expands into a `lock_and_key` interior. Zero new composition machinery needed.
+- **6.1–6.3 are the foundation** (edge zones + multi-connector + alignment). Without them, everything collapses into spaghetti.
+- **6.4–6.7 are incremental content** (rasterization, buildings, patterns, features). Can be added one at a time.
+- **6.8 is the deferred motif propagation** from Phase 4.6 — now with a real scenario that needs it.
+
+**Exit criterion:** `cargo run -- port_district` produces a connected urban map where streets are visually recognizable as streets (long, axis-aligned, buildings lined up on both sides with evenly-distributed doors), plazas anchor intersections, quest buildings have interiors, facade buildings provide density, and motif-driven entity spread creates coherent themed areas. The narrative pattern is recognizable as a heist/investigation story structure realized in urban geometry.
+
+---
+
+### Phase 7: Organic Caves & Pure Outdoors
+
+**Goal:** Large cave halls gain interior structure (marketplace-like feature arrangement). Pure outdoor maps introduce area-scale planning (regions, paths, landmarks) above the room-scale system.
+
+**Key insight:** Phase 6's open-space and alignment work directly benefits caves (a large hall IS an underground plaza). Pure outdoors is a genuinely new abstraction layer — regions connected by organic paths, not corridors.
+
+| # | Task | Status | Description |
+|---|---|---|---|
+| 7.1 | **Cave Halls as Structured Spaces** | | Large cave rooms (≥10×10) gain interior structure using the zone+template system. A "fungal market" template arranges stalagmite clusters like stalls. An "underground lake" template carves a water region with shore paths. Existing `CaveIrregularizer` provides shape; new templates provide layout. |
+| 7.2 | **Area Plan (Region-Scale Layout)** | | New layer above `MapIntent`: `AreaPlan` defines regions (forest, cliff, cave entrance, clearing) with transitions. Each region becomes one or more `MapIntent` instances composed together. The pipeline gains an optional area-planning stage. |
+| 7.3 | **Organic Connections** | | Connections between outdoor regions aren't hallways — they're paths, rivers, ridgelines. New `ConnectionStyle` enum: `Corridor` (existing), `Path` (wider, irregular edges), `River` (water tiles, bridges), `Cliff` (vertical, stairs). Router selects style from region adjacency. |
+| 7.4 | **Biome Transitions** | | Where two regions meet, a transition zone blends their features. Forest→cliff: trees thin, rocks appear. Cave→outdoors: daylight scatter, moss. Implemented as atmosphere profiles keyed to `(region_a, region_b)` pairs applied to border spaces. |
+| 7.5 | **Landmark Planning** | | `AreaPlan` gains `landmarks: Vec<Landmark>` — notable features visible from a distance (tower, ancient tree, waterfall). Landmarks anchor navigation; the area planner places regions *around* landmarks. They become Goal/Hub nodes in the area-level graph. |
+| 7.6 | **New Scenario: Mountain Pass** | | Outdoor trail: forest clearing → mountain path → cliff overlook → cave entrance → cave interior. Tests: organic connections (paths not corridors), biome transitions, 2 map scales (area + room), landmark (the peak visible throughout). |
+
+**Design decisions:**
+- 7.1 is a quick win: just adds templates for existing large cave rooms. The zone system already supports this.
+- 7.2–7.3 are the big architectural leap: a hierarchical pipeline where the area plan generates multiple `MapIntent`s. Genuinely new structure.
+- This phase is intentionally open-ended — scope to what the Mountain Pass scenario needs, defer the rest.
+- Multi-level support (Wizard's Tower) can slot in here as vertical connections between area regions.
+
+**Exit criterion:** `cargo run -- mountain_pass` produces a multi-region outdoor map with organic path connections, biome blending at region borders, and at least one landmark that anchors navigation.
 
 ---
 
@@ -264,12 +519,14 @@ GeometryPlanner (trait — public pipeline contract)
 |---|---|---|
 | Noble Crypt | lock-and-key, undead theme | Foundation ✅ |
 | Tavern Cellar | branching, urban theme, secrets | Foundation ✅ |
-| Natural Cave | exploration, scatter terrain, irregular shapes | Phase 3 ✅ (shapes: Phase 4) |
+| Natural Cave | exploration, scatter terrain, irregular shapes, pattern composition | Phase 3 ✅ (shapes: Phase 4, composition: Phase 5.2) |
 | Rat-Infested Port Cellar | motif directives, entity pressure, infested rooms | Phase 4 ✅ |
-| Abandoned Mine | pattern composition, medium scale, pacing, force-directed layout | Phase 5 |
-| Wizard's Tower | vertical traversal, arcane theme, multi-level | Phase 6 |
-| Thieves' Guild | complex hub-and-spoke, traps, encounter budgets | Phase 6 |
-| Dragon's Lair | large scale, encounter budgets, boss room | Phase 6 |
+| Abandoned Mine | medium scale, pacing, force-directed layout | Phase 5 |
+| **Port District** | multi-connector streets, building expansion, outdoor features, motif propagation | **Phase 6** |
+| Thieves' Guild | complex hub-and-spoke, traps, heist pattern (variant of Port District) | Phase 6 |
+| **Mountain Pass** | organic connections, biome transitions, area-scale planning, landmarks | **Phase 7** |
+| Wizard's Tower | vertical traversal, multi-level, arcane theme | Phase 7 (vertical as connection style) |
+| Dragon's Lair | large scale, landmark-driven, boss encounter | Phase 7 |
 
 ---
 

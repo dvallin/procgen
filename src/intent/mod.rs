@@ -7,6 +7,7 @@ pub mod graph;
 pub mod instantiate;
 pub mod map_intent;
 pub mod pattern;
+pub mod rest_points;
 pub mod selector;
 pub mod template;
 pub mod vocabulary;

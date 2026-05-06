@@ -448,6 +448,9 @@ fn zone_to_strategy(zone: ZoneKind) -> PlacementStrategy {
         ZoneKind::WallBand => PlacementStrategy::WallAdjacent,
         ZoneKind::Corner => PlacementStrategy::Corner,
         ZoneKind::Open | ZoneKind::DoorPath => PlacementStrategy::RandomFloor,
+        // Urban zone kinds: edge zones and frontage map to wall-adjacent placement
+        // (features along edges/storefronts are conceptually similar to wall placement).
+        ZoneKind::EdgeZone | ZoneKind::Frontage => PlacementStrategy::WallAdjacent,
     }
 }
 
@@ -537,6 +540,8 @@ mod tests {
             label: None,
             archetype,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 

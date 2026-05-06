@@ -28,6 +28,30 @@ pub enum SpaceArchetype {
     Courtyard,
     /// A specialized functional space (kitchen, lab, forge, chapel)
     Workshop,
+    /// A large open urban area (market square, town square)
+    Plaza,
+    /// A linear urban thoroughfare (main road, boulevard)
+    Street,
+    /// A narrow urban passage (back alley, side lane)
+    Alley,
+    /// A small commercial building (storefront, market stall)
+    Shop,
+    /// A large storage or industrial building
+    Warehouse,
+}
+
+/// How connectors (doors) should be distributed along a space's boundary.
+/// Without distribution control, N doors randomly placed on walls produces visual chaos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConnectorDistribution {
+    /// Evenly spaced along the wall (for street-side building entrances).
+    Uniform,
+    /// Grouped at the center of the wall (for plazas with clustered access).
+    Clustered,
+    /// Snapped to regular grid intervals (for warehouse loading bays).
+    GridAligned,
+    /// Only at the short sides / ends (for street endpoints, corridor-like).
+    Ends,
 }
 
 // --- SizeHint: replaces hardcoded role→size mapping ---
@@ -55,6 +79,26 @@ pub enum SizeHint {
     },
 }
 
+// --- Alignment types ---
+
+/// Which side of a space to align or attach to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AlignSide {
+    North,
+    South,
+    East,
+    West,
+}
+
+/// Preferred elongation axis for a space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Axis {
+    /// The space should be wider than tall (w > h).
+    Horizontal,
+    /// The space should be taller than wide (h > w).
+    Vertical,
+}
+
 // --- SpatialConstraint: rules between spaces ---
 
 /// Constraints on the spatial arrangement. The spatial planner records these;
@@ -77,6 +121,25 @@ pub enum SpatialConstraint {
     PreferPerimeter { space: SpaceId },
     /// A space should be placed centrally (hub feel).
     PreferCentral { space: SpaceId },
+
+    // ── Urban alignment constraints (6.3) ──
+    /// Space `b`'s wall on `side` should align flush against space `a`'s long edge.
+    /// Used for buildings aligning to streets.
+    AlignEdge {
+        a: SpaceId,
+        b: SpaceId,
+        side: AlignSide,
+    },
+    /// Building connects to a specific side of the street.
+    /// Stronger than `AlignEdge` — implies adjacency + door placement on that face.
+    AttachToEdge {
+        building: SpaceId,
+        street: SpaceId,
+        side: AlignSide,
+    },
+    /// Space should be elongated along the given axis.
+    /// Streets prefer horizontal/vertical orientation; plazas are square (no constraint).
+    PreferOrientation { space: SpaceId, axis: Axis },
 }
 
 // --- Existing types, updated ---
@@ -115,6 +178,12 @@ pub struct SpaceSpec {
     pub archetype: Option<SpaceArchetype>,
     /// Size hint — guides the geometry planner's dimension choices.
     pub size_hint: SizeHint,
+    /// Maximum number of connectors (doors) this space can have.
+    /// None means use the default (typically 2 for rooms, unlimited for streets/plazas).
+    pub max_connectors: Option<u32>,
+    /// How connectors should be distributed along this space's boundary.
+    /// None means default behavior (legacy: place wherever convenient).
+    pub connector_distribution: Option<ConnectorDistribution>,
 }
 
 impl SpaceSpec {
@@ -144,6 +213,37 @@ impl SpaceSpec {
     pub fn has_atmosphere_tag(&self, tag: &Tag) -> bool {
         self.atmosphere_tags.contains(tag)
     }
+
+    /// Returns the effective max connectors for this space.
+    /// Defaults: Street/Alley = 10, Plaza = 8, Hall/Courtyard = 6, others = 4.
+    pub fn effective_max_connectors(&self) -> u32 {
+        if let Some(max) = self.max_connectors {
+            return max;
+        }
+        match self.archetype {
+            Some(SpaceArchetype::Street) | Some(SpaceArchetype::Alley) => 10,
+            Some(SpaceArchetype::Plaza) => 8,
+            Some(SpaceArchetype::Hall) | Some(SpaceArchetype::Courtyard) => 6,
+            _ => 4,
+        }
+    }
+
+    /// Returns the effective connector distribution for this space.
+    /// Defaults: Street = Uniform, Plaza = Clustered, Corridor/Alley = Ends, Warehouse = GridAligned, others = None.
+    pub fn effective_connector_distribution(&self) -> Option<ConnectorDistribution> {
+        if self.connector_distribution.is_some() {
+            return self.connector_distribution;
+        }
+        match self.archetype {
+            Some(SpaceArchetype::Street) => Some(ConnectorDistribution::Uniform),
+            Some(SpaceArchetype::Plaza) => Some(ConnectorDistribution::Clustered),
+            Some(SpaceArchetype::Corridor) | Some(SpaceArchetype::Alley) => {
+                Some(ConnectorDistribution::Ends)
+            }
+            Some(SpaceArchetype::Warehouse) => Some(ConnectorDistribution::GridAligned),
+            _ => None,
+        }
+    }
 }
 
 /// Known structural tags — these trigger gameplay mechanics and should be
@@ -155,6 +255,7 @@ pub const STRUCTURAL_TAG_NAMES: &[&str] = &[
     "contains_key",
     "secret",
     "hidden",
+    "rest_point",
 ];
 
 /// Classify a list of raw tags into (structural, atmosphere) buckets.
@@ -190,4 +291,154 @@ pub struct SpatialPlan {
     /// The map's location kind — propagated from MapIntent for downstream use
     /// (e.g. geometry shape refinement, feature placement).
     pub location_kind: crate::intent::map_intent::LocationKind,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intent::graph::{NodeRole, ScenarioNodeId};
+
+    /// Helper: build a minimal SpaceSpec with the given archetype.
+    fn make_spec_with_archetype(archetype: Option<SpaceArchetype>) -> SpaceSpec {
+        SpaceSpec {
+            id: SpaceId(0),
+            origin: ScenarioNodeId(0),
+            role: NodeRole::Hub,
+            structural_tags: vec![],
+            atmosphere_tags: vec![],
+            motifs: vec![],
+            style: RealizationStyle::RoomLike,
+            kind: SpaceKind::Atomic(AtomicSpace {
+                width: 5,
+                height: 5,
+            }),
+            label: None,
+            archetype,
+            size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
+        }
+    }
+
+    // --- effective_max_connectors tests ---
+
+    #[test]
+    fn effective_max_connectors_street() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Street));
+        assert_eq!(spec.effective_max_connectors(), 10);
+    }
+
+    #[test]
+    fn effective_max_connectors_alley() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Alley));
+        assert_eq!(spec.effective_max_connectors(), 10);
+    }
+
+    #[test]
+    fn effective_max_connectors_plaza() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Plaza));
+        assert_eq!(spec.effective_max_connectors(), 8);
+    }
+
+    #[test]
+    fn effective_max_connectors_hall() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Hall));
+        assert_eq!(spec.effective_max_connectors(), 6);
+    }
+
+    #[test]
+    fn effective_max_connectors_courtyard() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Courtyard));
+        assert_eq!(spec.effective_max_connectors(), 6);
+    }
+
+    #[test]
+    fn effective_max_connectors_chamber_default() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Chamber));
+        assert_eq!(spec.effective_max_connectors(), 4);
+    }
+
+    #[test]
+    fn effective_max_connectors_none_archetype() {
+        let spec = make_spec_with_archetype(None);
+        assert_eq!(spec.effective_max_connectors(), 4);
+    }
+
+    #[test]
+    fn effective_max_connectors_explicit_override() {
+        let mut spec = make_spec_with_archetype(Some(SpaceArchetype::Street));
+        spec.max_connectors = Some(2);
+        // Explicit override takes precedence over archetype default (10).
+        assert_eq!(spec.effective_max_connectors(), 2);
+    }
+
+    // --- effective_connector_distribution tests ---
+
+    #[test]
+    fn effective_connector_distribution_street() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Street));
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::Uniform)
+        );
+    }
+
+    #[test]
+    fn effective_connector_distribution_plaza() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Plaza));
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::Clustered)
+        );
+    }
+
+    #[test]
+    fn effective_connector_distribution_corridor() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Corridor));
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::Ends)
+        );
+    }
+
+    #[test]
+    fn effective_connector_distribution_alley() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Alley));
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::Ends)
+        );
+    }
+
+    #[test]
+    fn effective_connector_distribution_warehouse() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Warehouse));
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::GridAligned)
+        );
+    }
+
+    #[test]
+    fn effective_connector_distribution_chamber_none() {
+        let spec = make_spec_with_archetype(Some(SpaceArchetype::Chamber));
+        assert_eq!(spec.effective_connector_distribution(), None);
+    }
+
+    #[test]
+    fn effective_connector_distribution_none_archetype() {
+        let spec = make_spec_with_archetype(None);
+        assert_eq!(spec.effective_connector_distribution(), None);
+    }
+
+    #[test]
+    fn effective_connector_distribution_explicit_override() {
+        let mut spec = make_spec_with_archetype(Some(SpaceArchetype::Chamber));
+        spec.connector_distribution = Some(ConnectorDistribution::Uniform);
+        // Explicit override takes precedence over archetype default (None).
+        assert_eq!(
+            spec.effective_connector_distribution(),
+            Some(ConnectorDistribution::Uniform)
+        );
+    }
 }

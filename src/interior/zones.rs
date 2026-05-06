@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 
 use crate::geometry::geom::{Point, Rect};
+use crate::spatial::plan::SpaceArchetype;
 use crate::tile::map::TileMap;
 use crate::tile::registry::Tile;
 
@@ -15,21 +16,39 @@ use super::plan::{Zone, ZoneKind};
 ///
 /// Classification priority (first match wins):
 /// 1. **DoorPath** — cell is in the `reserved_paths` set.
-/// 2. **Center** — cell is within `center_radius` of the room's geometric center.
-/// 3. **Corner** — cell is within 2 tiles of two perpendicular walls.
-/// 4. **WallBand** — cell has at least one cardinal neighbor that is a wall.
-/// 5. **Open** — everything else.
+/// 2. **EdgeZone/Frontage** — (urban archetypes only) cells near room edges.
+/// 3. **Center** — cell is within `center_radius` of the room's geometric center.
+/// 4. **Corner** — cell is within 2 tiles of two perpendicular walls.
+/// 5. **WallBand** — cell has at least one cardinal neighbor that is a wall.
+/// 6. **Open** — everything else.
 ///
 /// Only `Tile::FLOOR` cells inside the room (excluding boundary) are classified.
-pub fn classify_zones(tiles: &TileMap, rect: Rect, reserved_paths: &HashSet<Point>) -> Vec<Zone> {
+///
+/// When `archetype` is `Some`, urban-specific zone kinds are applied:
+/// - **Street/Alley**: cells within 1–2 tiles of the long edges become `EdgeZone`,
+///   the center strip remains walkable (`DoorPath` or `Open`).
+/// - **Plaza**: cells within 2 tiles of all edges become `EdgeZone`, center stays `Center`/`Open`.
+/// - **Shop/Warehouse**: cells on the street-facing wall band become `Frontage`,
+///   rest follow normal classification.
+pub fn classify_zones(
+    tiles: &TileMap,
+    rect: Rect,
+    reserved_paths: &HashSet<Point>,
+    archetype: Option<SpaceArchetype>,
+) -> Vec<Zone> {
     let center = rect.center();
     let center_radius = compute_center_radius(rect);
 
     let mut door_path_cells = Vec::new();
+    let mut edge_zone_cells = Vec::new();
+    let mut frontage_cells = Vec::new();
     let mut center_cells = Vec::new();
     let mut corner_cells = Vec::new();
     let mut wall_band_cells = Vec::new();
     let mut open_cells = Vec::new();
+
+    // Determine urban edge classification parameters.
+    let urban_mode = archetype.and_then(|a| urban_edge_mode(a, rect));
 
     // Iterate interior cells (skip boundary which is walls/doors).
     let x_start = rect.x + 1;
@@ -52,7 +71,22 @@ pub fn classify_zones(tiles: &TileMap, rect: Rect, reserved_paths: &HashSet<Poin
                 continue;
             }
 
-            // Priority 2: center
+            // Priority 2: urban edge/frontage zones
+            if let Some(ref mode) = urban_mode {
+                match classify_urban_cell(mode, p, rect) {
+                    Some(ZoneKind::EdgeZone) => {
+                        edge_zone_cells.push(p);
+                        continue;
+                    }
+                    Some(ZoneKind::Frontage) => {
+                        frontage_cells.push(p);
+                        continue;
+                    }
+                    _ => {} // fall through to normal classification
+                }
+            }
+
+            // Priority 3: center
             let dx = (p.x - center.x).abs();
             let dy = (p.y - center.y).abs();
             if dx <= center_radius && dy <= center_radius {
@@ -60,19 +94,19 @@ pub fn classify_zones(tiles: &TileMap, rect: Rect, reserved_paths: &HashSet<Poin
                 continue;
             }
 
-            // Priority 3: corner (near two perpendicular walls)
+            // Priority 4: corner (near two perpendicular walls)
             if is_corner_cell(tiles, p) {
                 corner_cells.push(p);
                 continue;
             }
 
-            // Priority 4: wall band (adjacent to at least one wall)
+            // Priority 5: wall band (adjacent to at least one wall)
             if is_wall_adjacent(tiles, p) {
                 wall_band_cells.push(p);
                 continue;
             }
 
-            // Priority 5: open
+            // Priority 6: open
             open_cells.push(p);
         }
     }
@@ -82,6 +116,18 @@ pub fn classify_zones(tiles: &TileMap, rect: Rect, reserved_paths: &HashSet<Poin
         zones.push(Zone {
             kind: ZoneKind::DoorPath,
             cells: door_path_cells,
+        });
+    }
+    if !edge_zone_cells.is_empty() {
+        zones.push(Zone {
+            kind: ZoneKind::EdgeZone,
+            cells: edge_zone_cells,
+        });
+    }
+    if !frontage_cells.is_empty() {
+        zones.push(Zone {
+            kind: ZoneKind::Frontage,
+            cells: frontage_cells,
         });
     }
     if !center_cells.is_empty() {
@@ -110,6 +156,105 @@ pub fn classify_zones(tiles: &TileMap, rect: Rect, reserved_paths: &HashSet<Poin
     }
 
     zones
+}
+
+/// Describes how urban edge zones should be classified for a given archetype.
+enum UrbanEdgeMode {
+    /// Street/Alley: edge cells along the long edges become EdgeZone.
+    /// `edge_depth` is how many tiles inward from the long edges count.
+    /// `is_horizontal` indicates whether the long axis is horizontal.
+    LinearEdge {
+        edge_depth: i32,
+        is_horizontal: bool,
+    },
+    /// Plaza: cells within `edge_depth` tiles of any edge become EdgeZone.
+    AllEdges { edge_depth: i32 },
+    /// Shop/Warehouse: cells in the wall band on the south side (street-facing) become Frontage.
+    StreetFrontage,
+}
+
+/// Determine the urban edge mode for an archetype, if applicable.
+fn urban_edge_mode(archetype: SpaceArchetype, rect: Rect) -> Option<UrbanEdgeMode> {
+    match archetype {
+        SpaceArchetype::Street => {
+            let interior_w = rect.w - 2;
+            let interior_h = rect.h - 2;
+            let is_horizontal = interior_w >= interior_h;
+            // Streets get 2 tiles of edge zone along long edges.
+            Some(UrbanEdgeMode::LinearEdge {
+                edge_depth: 2,
+                is_horizontal,
+            })
+        }
+        SpaceArchetype::Alley => {
+            let interior_w = rect.w - 2;
+            let interior_h = rect.h - 2;
+            let is_horizontal = interior_w >= interior_h;
+            // Alleys are narrow — only 1 tile of edge zone.
+            Some(UrbanEdgeMode::LinearEdge {
+                edge_depth: 1,
+                is_horizontal,
+            })
+        }
+        SpaceArchetype::Plaza => Some(UrbanEdgeMode::AllEdges { edge_depth: 2 }),
+        SpaceArchetype::Shop | SpaceArchetype::Warehouse => Some(UrbanEdgeMode::StreetFrontage),
+        _ => None,
+    }
+}
+
+/// Classify a single cell according to urban edge rules.
+/// Returns `Some(ZoneKind)` if the cell falls in an urban-specific zone, `None` otherwise.
+fn classify_urban_cell(mode: &UrbanEdgeMode, p: Point, rect: Rect) -> Option<ZoneKind> {
+    let x_start = rect.x + 1;
+    let x_end = rect.x + rect.w - 2; // last interior x
+    let y_start = rect.y + 1;
+    let y_end = rect.y + rect.h - 2; // last interior y
+
+    match mode {
+        UrbanEdgeMode::LinearEdge {
+            edge_depth,
+            is_horizontal,
+        } => {
+            if *is_horizontal {
+                // Long axis is X — edges are top and bottom (Y boundaries)
+                let dist_from_top = p.y - y_start;
+                let dist_from_bottom = y_end - p.y;
+                if dist_from_top < *edge_depth || dist_from_bottom < *edge_depth {
+                    return Some(ZoneKind::EdgeZone);
+                }
+            } else {
+                // Long axis is Y — edges are left and right (X boundaries)
+                let dist_from_left = p.x - x_start;
+                let dist_from_right = x_end - p.x;
+                if dist_from_left < *edge_depth || dist_from_right < *edge_depth {
+                    return Some(ZoneKind::EdgeZone);
+                }
+            }
+            None
+        }
+        UrbanEdgeMode::AllEdges { edge_depth } => {
+            let dist_from_top = p.y - y_start;
+            let dist_from_bottom = y_end - p.y;
+            let dist_from_left = p.x - x_start;
+            let dist_from_right = x_end - p.x;
+            let min_dist = dist_from_top
+                .min(dist_from_bottom)
+                .min(dist_from_left)
+                .min(dist_from_right);
+            if min_dist < *edge_depth {
+                return Some(ZoneKind::EdgeZone);
+            }
+            None
+        }
+        UrbanEdgeMode::StreetFrontage => {
+            // Street-facing = south wall band (cells adjacent to the south wall).
+            // We use the last interior row as frontage.
+            if p.y == y_end {
+                return Some(ZoneKind::Frontage);
+            }
+            None
+        }
+    }
 }
 
 /// Compute the center radius based on room dimensions.
@@ -187,7 +332,7 @@ mod tests {
         let (map, rect) = make_room_map();
         let reserved = HashSet::new();
 
-        let zones = classify_zones(&map, rect, &reserved);
+        let zones = classify_zones(&map, rect, &reserved, None);
 
         let total_cells: usize = zones.iter().map(|z| z.cells.len()).sum();
         // Interior is 5x5 = 25 floor cells.
@@ -199,7 +344,7 @@ mod tests {
         let (map, rect) = make_room_map();
         let reserved = HashSet::new();
 
-        let zones = classify_zones(&map, rect, &reserved);
+        let zones = classify_zones(&map, rect, &reserved, None);
 
         let center_zone = zones.iter().find(|z| z.kind == ZoneKind::Center);
         assert!(center_zone.is_some());
@@ -214,7 +359,7 @@ mod tests {
         reserved.insert(Point { x: 2, y: 3 });
         reserved.insert(Point { x: 3, y: 3 });
 
-        let zones = classify_zones(&map, rect, &reserved);
+        let zones = classify_zones(&map, rect, &reserved, None);
 
         let door_path = zones.iter().find(|z| z.kind == ZoneKind::DoorPath);
         assert!(door_path.is_some());
@@ -231,7 +376,7 @@ mod tests {
         let mut reserved = HashSet::new();
         reserved.insert(Point { x: 3, y: 3 }); // Center is also reserved
 
-        let zones = classify_zones(&map, rect, &reserved);
+        let zones = classify_zones(&map, rect, &reserved, None);
 
         // (3,3) should be in DoorPath, not Center.
         let door_path = zones.iter().find(|z| z.kind == ZoneKind::DoorPath).unwrap();
@@ -266,7 +411,7 @@ mod tests {
             }
         }
 
-        let zones = classify_zones(&map, rect, &HashSet::new());
+        let zones = classify_zones(&map, rect, &HashSet::new(), None);
 
         let center = zones.iter().find(|z| z.kind == ZoneKind::Center).unwrap();
         // Only the exact center should be classified as Center.

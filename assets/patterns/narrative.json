@@ -164,5 +164,37 @@
       { "tag": "ruins", "weight": 1 },
       { "tag": "cavern", "weight": 1 }
     ]
+  },
+  {
+    "id": "urban_market",
+    "name": "Urban Market",
+    "description": "A market plaza at the center with streets connecting to shops and a warehouse. One street leads to the gate guarding the main objective.",
+    "slots": [
+      { "key": "entry", "role": "Entry", "optional": false },
+      { "key": "main_street", "role": "Transition", "optional": false },
+      { "key": "plaza", "role": "Hub", "optional": false },
+      { "key": "side_street", "role": "Transition", "optional": false },
+      { "key": "shop_a", "role": "Branch", "optional": false },
+      { "key": "shop_b", "role": "Branch", "optional": true },
+      { "key": "gate", "role": "Gate", "optional": false },
+      { "key": "warehouse", "role": "Goal", "optional": false },
+      { "key": "reward", "role": "Reward", "optional": true }
+    ],
+    "edges": [
+      { "from": "entry", "to": "main_street", "role": "Traversal" },
+      { "from": "main_street", "to": "plaza", "role": "Traversal" },
+      { "from": "plaza", "to": "side_street", "role": "Traversal" },
+      { "from": "side_street", "to": "shop_a", "role": "OptionalTraversal" },
+      { "from": "side_street", "to": "shop_b", "role": "OptionalTraversal" },
+      { "from": "plaza", "to": "gate", "role": "Traversal" },
+      { "from": "gate", "to": "warehouse", "role": "RestrictedTraversal" },
+      { "from": "plaza", "to": "reward", "role": "SecretTraversal" }
+    ],
+    "votes": [
+      { "tag": "marketplace", "weight": 3 },
+      { "tag": "urban", "weight": 2 },
+      { "tag": "dock_district", "weight": 2 },
+      { "tag": "commerce", "weight": 1 }
+    ]
   }
 ]

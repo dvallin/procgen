@@ -310,5 +310,116 @@
         "weight": 2.0
       }
     ]
+  },
+  {
+    "name": "mine_shaft",
+    "match_tags": ["mine", "shaft", "tunnel"],
+    "priority": 0,
+    "scatter": [{ "target_tile": "rubble", "density": 0.12, "weight": 3.0 }],
+    "features": [
+      {
+        "feature_type": "support_beam",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "lantern",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 2.0
+      },
+      {
+        "feature_type": "collapsed_timber",
+        "strategy": "RandomFloor",
+        "max_count": 1,
+        "weight": 1.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "undead_miner",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 3.0
+      },
+      {
+        "archetype": "bat",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 2.0
+      }
+    ]
+  },
+  {
+    "name": "mine_gallery",
+    "match_tags": ["mine", "gallery", "excavated"],
+    "priority": 0,
+    "scatter": [
+      { "target_tile": "rubble", "density": 0.15, "weight": 3.0 },
+      { "target_tile": "water", "density": 0.05, "weight": 1.0 }
+    ],
+    "features": [
+      {
+        "feature_type": "ore_vein",
+        "strategy": "WallAdjacent",
+        "max_count": 2,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "mine_cart",
+        "strategy": "RandomFloor",
+        "max_count": 1,
+        "weight": 2.5
+      },
+      {
+        "feature_type": "pickaxe",
+        "strategy": "RandomFloor",
+        "max_count": 1,
+        "weight": 1.5
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "undead_miner",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 3.0
+      },
+      {
+        "archetype": "cave_spider",
+        "placement": "RandomFloor",
+        "max_count": 1,
+        "weight": 1.5
+      }
+    ]
+  },
+  {
+    "name": "mine_collapse",
+    "match_tags": ["collapsed", "mine", "dangerous"],
+    "priority": 1,
+    "scatter": [{ "target_tile": "rubble", "density": 0.25, "weight": 4.0 }],
+    "features": [
+      {
+        "feature_type": "collapsed_timber",
+        "strategy": "RandomFloor",
+        "max_count": 3,
+        "weight": 4.0
+      },
+      {
+        "feature_type": "support_beam",
+        "strategy": "WallAdjacent",
+        "max_count": 1,
+        "weight": 2.0
+      }
+    ],
+    "entities": [
+      {
+        "archetype": "cave_spider",
+        "placement": "RandomFloor",
+        "max_count": 2,
+        "weight": 3.0
+      }
+    ]
   }
 ]

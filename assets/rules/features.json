@@ -43,5 +43,14 @@
     "match_role": null,
     "match_archetype": null,
     "match_tag": "smuggling"
+  },
+  {
+    "feature_type": "ore_vein",
+    "strategy": "WallAdjacent",
+    "required": true,
+    "max_count": 2,
+    "match_role": "Goal",
+    "match_archetype": null,
+    "match_tag": "mine"
   }
 ]

@@ -18,6 +18,7 @@ use crate::geometry::geom::{GeometryPlan, Point, Rect};
 use crate::intent::graph::NodeRole;
 use crate::situation::SituationDirective;
 use crate::spatial::plan::{SpaceId, SpaceSpec, SpatialPlan};
+use crate::tension::{TensionLevel, compute_tension};
 use crate::tile::map::TileMap;
 use crate::tile::registry::Tile;
 
@@ -65,6 +66,9 @@ impl EntityPlanner for SimpleEntityPlanner {
         rng: &mut dyn rand::RngCore,
     ) -> Result<EntityPlan, EntityPlanError> {
         let _span = info_span!("entity_planning", rooms = geometry.spaces.len()).entered();
+
+        // Compute tension levels for all rooms.
+        let tension_map = compute_tension(spatial);
 
         // Build SpaceId → SpaceSpec lookup.
         let spec_map: HashMap<SpaceId, &SpaceSpec> =
@@ -147,6 +151,13 @@ impl EntityPlanner for SimpleEntityPlanner {
             }
         }
 
+        // Build a quick lookup: SpaceId → count of entities already placed
+        // (from directives). This ensures pinned entities count toward density.
+        let mut directive_counts: HashMap<SpaceId, u32> = HashMap::new();
+        for e in &entities {
+            *directive_counts.entry(e.space_id).or_insert(0) += 1;
+        }
+
         for placed in &geometry.spaces {
             let Some(spec) = spec_map.get(&placed.space_id) else {
                 debug!(
@@ -167,18 +178,33 @@ impl EntityPlanner for SimpleEntityPlanner {
                 continue;
             }
 
-            let matched = matching_entity_rules(rules, spec);
+            // Look up this room's tension level.
+            let room_tension = tension_map
+                .get(&placed.space_id)
+                .copied()
+                .unwrap_or(TensionLevel::Low);
 
-            // Also include per-room atmosphere rules for this space.
+            let matched = matching_entity_rules(rules, spec, Some(room_tension));
+
+            // Also include per-room atmosphere rules for this space,
+            // filtered by tension.
             let atmosphere_rules = per_room_rules.get(&placed.space_id);
-            let all_matched: Vec<&EntityRule> = matched
+            let mut all_matched: Vec<&EntityRule> = matched
                 .into_iter()
                 .chain(
                     atmosphere_rules
-                        .map(|v| v.iter().collect::<Vec<_>>())
+                        .map(|v| {
+                            v.iter()
+                                .filter(|r| r.tension_allows(room_tension))
+                                .collect::<Vec<_>>()
+                        })
                         .unwrap_or_default(),
                 )
                 .collect();
+
+            // Sort rules: required rules (min_count > 0) first, so they get
+            // priority access to the density budget before optional rules.
+            all_matched.sort_by(|a, b| b.min_count.cmp(&a.min_count));
 
             if all_matched.is_empty() {
                 debug!(
@@ -192,16 +218,24 @@ impl EntityPlanner for SimpleEntityPlanner {
             debug!(
                 space_id = ?placed.space_id,
                 label = ?placed.label,
+                tension = %room_tension,
                 rule_count = all_matched.len(),
                 "matched entity rules"
             );
 
             let rect = placed.rect;
-            let density_cap = compute_density_cap(tiles, rect);
+            let base_density = compute_density_cap(tiles, rect);
+            // Scale density cap by tension: high-tension rooms pack more entities.
+            let density_cap =
+                (base_density as f64 * room_tension.density_multiplier()).ceil() as u32;
+            let density_cap = density_cap.max(1); // always allow at least 1
 
             // Per-room occupied starts from the global set.
             let mut room_occupied = global_occupied.clone();
-            let mut room_entity_count = 0u32;
+            // Start count from pre-placed entities (e.g. pinned directives)
+            // so they count toward the density budget.
+            let mut room_entity_count =
+                directive_counts.get(&placed.space_id).copied().unwrap_or(0);
 
             let room_features = feature_positions
                 .get(&placed.space_id)
@@ -554,6 +588,8 @@ mod tests {
             label: None,
             archetype,
             size_hint: SizeHint::Medium,
+            max_connectors: None,
+            connector_distribution: None,
         }
     }
 
@@ -883,6 +919,368 @@ mod tests {
         assert!(
             result.is_err(),
             "should error when required entity can't be placed"
+        );
+    }
+
+    // ── Tension-aware tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn tension_scales_density_cap() {
+        // A 7×7 room with 9 interior floor tiles (3×3 inner).
+        // Base density = 9/4 = 2.
+        // Low tension: ceil(2 * 0.5) = 1
+        // Medium tension: ceil(2 * 1.0) = 2
+        // High tension: ceil(2 * 1.5) = 3
+        // Climax tension: ceil(2 * 2.0) = 4
+        let map = make_room_map();
+        let rect = Rect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+        };
+
+        let base = compute_density_cap(&map, rect);
+        assert_eq!(
+            base, 2,
+            "base density should be 9/4 = 2 (with door -> 8 floor + 1 door, but cap uses FLOOR only)"
+        );
+
+        // Verify the scaling math.
+        let low_cap = (base as f64 * TensionLevel::Low.density_multiplier()).ceil() as u32;
+        assert_eq!(low_cap, 1);
+
+        let medium_cap = (base as f64 * TensionLevel::Medium.density_multiplier()).ceil() as u32;
+        assert_eq!(medium_cap, 2);
+
+        let high_cap = (base as f64 * TensionLevel::High.density_multiplier()).ceil() as u32;
+        assert_eq!(high_cap, 3);
+
+        let climax_cap = (base as f64 * TensionLevel::Climax.density_multiplier()).ceil() as u32;
+        assert_eq!(climax_cap, 4);
+    }
+
+    #[test]
+    fn low_tension_room_gets_fewer_entities() {
+        // Setup: Hub room at Low tension with a rule that allows up to 3 entities.
+        // Low tension scales density to 0.5x, so should cap at 1.
+        let map = make_room_map();
+        let rect = Rect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+        };
+
+        // Two rooms: Entry(0) → Hub(1). Hub is at distance 1 from entry,
+        // critical path = 1 (no goal), so hub gets normalized depth 1/1 = 1.0... but wait,
+        // with no goal, max depth IS 1, so ratio = 1/1 = 1.0 → Climax.
+        // To get Low tension: add a Goal far away, making hub at distance 1 Low.
+        // Entry(0) → Hub(1) → Gate(2) → Hub(3) → Goal(4)
+        // Hub(1): depth=1, critical=4, ratio=0.25 → Low
+        let spatial = SpatialPlan {
+            spaces: vec![
+                make_spec(0, NodeRole::Entry, Some(SpaceArchetype::Vestibule), &[]),
+                make_spec(1, NodeRole::Hub, Some(SpaceArchetype::Hall), &["test_tag"]),
+                make_spec(2, NodeRole::Gate, Some(SpaceArchetype::Vestibule), &[]),
+                make_spec(3, NodeRole::Hub, Some(SpaceArchetype::Hall), &[]),
+                make_spec(
+                    4,
+                    NodeRole::Goal,
+                    Some(SpaceArchetype::Chamber),
+                    &["main_goal"],
+                ),
+            ],
+            links: vec![
+                SpaceLink {
+                    from: SpaceId(0),
+                    to: SpaceId(1),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(1),
+                    to: SpaceId(2),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(2),
+                    to: SpaceId(3),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(3),
+                    to: SpaceId(4),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+            ],
+            constraints: vec![],
+            location_kind: LocationKind::Dungeon,
+        };
+
+        let geometry = GeometryPlan {
+            spaces: vec![PlacedSpace {
+                space_id: SpaceId(1),
+                rect,
+                footprint: Footprint::Rect(rect),
+                style: RealizationStyle::RoomLike,
+                label: Some("Test Hub".into()),
+            }],
+            links: vec![],
+        };
+
+        let features = FeaturePlan { features: vec![] };
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Rule with no tension_min — matches everything. Wants up to 3.
+        let rules = vec![EntityRule {
+            archetype: EntityArchetypeId::from("rat"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            min_count: 0,
+            max_count: 3,
+            behavior_tags: vec![],
+            patrol: false,
+            role_match: None,
+            archetype_match: None,
+            tag_match: Some(Tag::from("test_tag")),
+            tension_min: None,
+        }];
+
+        let result = SimpleEntityPlanner
+            .plan(
+                &spatial,
+                &geometry,
+                &map,
+                &features,
+                &rules,
+                &HashMap::new(),
+                &[],
+                &mut rng,
+            )
+            .unwrap();
+
+        // Hub at depth 1 / critical_path 4 = 0.25 → Low tension.
+        // Base density = 2, Low multiplier = 0.5 → cap = 1.
+        assert_eq!(
+            result.entities.len(),
+            1,
+            "low tension should cap entities at 1 (0.5× base density of 2)"
+        );
+    }
+
+    #[test]
+    fn tension_min_filters_rules_in_planner() {
+        // Setup: a room at Low tension should not match a rule with tension_min=High.
+        let map = make_room_map();
+        let rect = Rect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+        };
+
+        // Entry(0) → Hub(1) → Gate(2) → Hub(3) → Goal(4)
+        // Hub(1): depth=1, critical=4, ratio=0.25 → Low
+        let spatial = SpatialPlan {
+            spaces: vec![
+                make_spec(0, NodeRole::Entry, Some(SpaceArchetype::Vestibule), &[]),
+                make_spec(1, NodeRole::Hub, Some(SpaceArchetype::Hall), &["undead"]),
+                make_spec(2, NodeRole::Gate, Some(SpaceArchetype::Vestibule), &[]),
+                make_spec(3, NodeRole::Hub, Some(SpaceArchetype::Hall), &[]),
+                make_spec(
+                    4,
+                    NodeRole::Goal,
+                    Some(SpaceArchetype::Chamber),
+                    &["main_goal"],
+                ),
+            ],
+            links: vec![
+                SpaceLink {
+                    from: SpaceId(0),
+                    to: SpaceId(1),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(1),
+                    to: SpaceId(2),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(2),
+                    to: SpaceId(3),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(3),
+                    to: SpaceId(4),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+            ],
+            constraints: vec![],
+            location_kind: LocationKind::Dungeon,
+        };
+
+        let geometry = GeometryPlan {
+            spaces: vec![PlacedSpace {
+                space_id: SpaceId(1),
+                rect,
+                footprint: Footprint::Rect(rect),
+                style: RealizationStyle::RoomLike,
+                label: Some("Low Tension Hub".into()),
+            }],
+            links: vec![],
+        };
+
+        let features = FeaturePlan { features: vec![] };
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Rule requires High tension — should be filtered out for this Low-tension room.
+        let rules = vec![EntityRule {
+            archetype: EntityArchetypeId::from("skeleton"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            min_count: 0,
+            max_count: 2,
+            behavior_tags: vec![],
+            patrol: false,
+            role_match: None,
+            archetype_match: None,
+            tag_match: Some(Tag::from("undead")),
+            tension_min: Some(TensionLevel::High),
+        }];
+
+        let result = SimpleEntityPlanner
+            .plan(
+                &spatial,
+                &geometry,
+                &map,
+                &features,
+                &rules,
+                &HashMap::new(),
+                &[],
+                &mut rng,
+            )
+            .unwrap();
+
+        assert_eq!(
+            result.entities.len(),
+            0,
+            "rule with tension_min=High should not fire in Low-tension room"
+        );
+    }
+
+    #[test]
+    fn high_tension_room_allows_more_entities() {
+        // A room at High tension should get 1.5× density.
+        let map = make_room_map();
+        let rect = Rect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+        };
+
+        // Entry(0) → Hub(1). No goal → max depth = 1, ratio = 1/1 = Climax.
+        // Actually for High, we need ratio in (0.60, 0.90].
+        // Entry(0) → Hub(1) → Hub(2) → Hub(3) → Goal(4)
+        // Hub(3): depth=3, critical=4, ratio=3/4=0.75 → High
+        let spatial = SpatialPlan {
+            spaces: vec![
+                make_spec(0, NodeRole::Entry, Some(SpaceArchetype::Vestibule), &[]),
+                make_spec(1, NodeRole::Hub, Some(SpaceArchetype::Hall), &[]),
+                make_spec(2, NodeRole::Hub, Some(SpaceArchetype::Hall), &[]),
+                make_spec(3, NodeRole::Hub, Some(SpaceArchetype::Hall), &["test_tag"]),
+                make_spec(
+                    4,
+                    NodeRole::Goal,
+                    Some(SpaceArchetype::Chamber),
+                    &["main_goal"],
+                ),
+            ],
+            links: vec![
+                SpaceLink {
+                    from: SpaceId(0),
+                    to: SpaceId(1),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(1),
+                    to: SpaceId(2),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(2),
+                    to: SpaceId(3),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+                SpaceLink {
+                    from: SpaceId(3),
+                    to: SpaceId(4),
+                    role: crate::intent::graph::EdgeRole::Traversal,
+                    tags: vec![],
+                },
+            ],
+            constraints: vec![],
+            location_kind: LocationKind::Dungeon,
+        };
+
+        let geometry = GeometryPlan {
+            spaces: vec![PlacedSpace {
+                space_id: SpaceId(3),
+                rect,
+                footprint: Footprint::Rect(rect),
+                style: RealizationStyle::RoomLike,
+                label: Some("High Tension Hub".into()),
+            }],
+            links: vec![],
+        };
+
+        let features = FeaturePlan { features: vec![] };
+        let mut rng = StdRng::seed_from_u64(42);
+
+        // Rule that allows up to 5 entities.
+        let rules = vec![EntityRule {
+            archetype: EntityArchetypeId::from("skeleton"),
+            placement: EntityPlacementStrategy::RandomFloor,
+            min_count: 0,
+            max_count: 5,
+            behavior_tags: vec![],
+            patrol: false,
+            role_match: None,
+            archetype_match: None,
+            tag_match: Some(Tag::from("test_tag")),
+            tension_min: None,
+        }];
+
+        let result = SimpleEntityPlanner
+            .plan(
+                &spatial,
+                &geometry,
+                &map,
+                &features,
+                &rules,
+                &HashMap::new(),
+                &[],
+                &mut rng,
+            )
+            .unwrap();
+
+        // Hub(3) at depth 3/4 = 0.75 → High tension.
+        // Base density = 2, High multiplier = 1.5 → cap = ceil(3.0) = 3.
+        // Rule allows up to 5, but cap limits to 3.
+        assert_eq!(
+            result.entities.len(),
+            3,
+            "high tension should allow up to 3 entities (1.5× base density of 2)"
         );
     }
 }

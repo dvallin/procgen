@@ -163,13 +163,22 @@ impl IntentBuilder for GenericIntentBuilder {
             "slots filled"
         );
 
+        // 3b. Insert rest points on long critical paths.
+        let mut graph = filled.graph;
+        crate::intent::rest_points::insert_rest_points(&mut graph);
+        debug!(
+            nodes = graph.nodes.len(),
+            edges = graph.edges.len(),
+            "rest points processed"
+        );
+
         // 4. Infer structural constraints from the filled graph.
-        let constraints = infer_constraints(&filled.graph, pattern.max_depth);
+        let constraints = infer_constraints(&graph, pattern.max_depth);
         debug!(constraints = constraints.len(), "constraints inferred");
 
         // 5. Derive metadata from vocabulary + filled graph.
         let location_kind = vocabulary.location_kind;
-        let scale = scale_from_node_count(filled.graph.nodes.len());
+        let scale = scale_from_node_count(graph.nodes.len());
         let motifs: Vec<_> = vocabulary
             .motifs
             .iter()
@@ -183,7 +192,7 @@ impl IntentBuilder for GenericIntentBuilder {
             scale,
             tags: situation.tags.clone(),
             motifs,
-            structural_graph: filled.graph,
+            structural_graph: graph,
             constraints,
         })
     }

@@ -15,6 +15,7 @@ use crate::atmosphere::apply::apply_atmosphere_influences;
 use crate::atmosphere::profile::AtmosphereProfile;
 use crate::entity::plan::{EntityPlan, EntityPlanError};
 use crate::entity::planner::{EntityPlanner, SimpleEntityPlanner};
+use crate::entity::registry::EntityRegistry;
 use crate::entity::rules::EntityRule;
 use crate::feature::plan::{FeaturePlan, FeaturePlanError};
 use crate::feature::planner::{FeaturePlanner, SimpleFeaturePlanner};
@@ -25,8 +26,10 @@ use crate::geometry::geom::GeometryPlan;
 use crate::geometry::planner::{
     ColumnGeometryPlanner, GeometryPlanError, GeometryPlanner, PlacementConfig,
 };
+use crate::geometry::street_skeleton::StreetSkeletonPlanner;
 use crate::intent::builder::{IntentBuildError, IntentBuilder};
 use crate::intent::generic_builder::GenericIntentBuilder;
+use crate::intent::map_intent::LocationKind;
 use crate::intent::map_intent::MapIntent;
 use crate::interior::builder::build_interior_plans;
 use crate::interior::paths::{compute_reserved_paths, find_room_doors};
@@ -58,6 +61,9 @@ pub enum GeometryStrategy {
     /// Force-directed simulation layout.
     /// Better for medium-to-large maps (7–15+ rooms) with complex topology.
     ForceDirected,
+    /// Street-skeleton-first layout for urban environments.
+    /// Places backbone streets/plazas first, then attaches buildings.
+    StreetSkeleton,
 }
 
 impl Default for GeometryStrategy {
@@ -95,6 +101,8 @@ pub struct PipelineConfig {
     pub tile_registry: Option<TileRegistry>,
     /// Optional feature registry override. If `None`, uses the default built-in registry.
     pub feature_registry: Option<FeatureRegistry>,
+    /// Optional entity registry override. If `None`, uses the default built-in registry.
+    pub entity_registry: Option<EntityRegistry>,
     /// Optional atmosphere profiles override. If `None`, loads from the default asset path.
     pub atmosphere_profiles: Option<Vec<AtmosphereProfile>>,
     /// Number of weighted samples to draw from each atmosphere palette per room.
@@ -132,6 +140,7 @@ impl Default for PipelineConfig {
             entity_rules: None,
             tile_registry: None,
             feature_registry: None,
+            entity_registry: None,
             atmosphere_profiles: None,
             atmosphere_sample_budget: 3,
             interior_templates: None,
@@ -181,6 +190,8 @@ pub struct RoomAnnotation {
     pub is_entry: bool,
     /// True if this room is the primary goal (has "main_goal" structural tag).
     pub is_goal: bool,
+    /// Computed tension level based on graph distance along the critical path.
+    pub tension: crate::tension::TensionLevel,
     /// Assigned letter for map overlay rendering (A, B, C, …).
     pub letter: char,
     /// Center point of the room (for letter overlay positioning).
@@ -208,6 +219,10 @@ pub struct PipelineResult {
     pub interiors: Vec<InteriorPlan>,
     /// Room annotations for world-engine correlation.
     pub annotations: Vec<RoomAnnotation>,
+    /// The seed that was used for this generation run.
+    pub seed: u64,
+    /// Pacing validation warnings (non-fatal observations about the tension curve).
+    pub pacing_warnings: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,16 +374,17 @@ impl Pipeline {
         let _span = info_span!("pipeline").entered();
 
         // ── 0. Seeded RNG ──────────────────────────────────────────────
-        let mut rng: StdRng = match self.config.seed {
-            Some(seed) => {
-                info!(seed = seed, "using fixed seed");
-                StdRng::seed_from_u64(seed)
-            }
-            None => {
-                info!("using entropy-based seed");
-                StdRng::from_entropy()
-            }
-        };
+        let seed = self.config.seed.unwrap_or_else(|| {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let t = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64;
+            // Mix in some additional entropy from thread_rng.
+            t ^ rand::random::<u64>()
+        });
+        info!(seed = seed, "using seed");
+        let mut rng: StdRng = StdRng::seed_from_u64(seed);
 
         // ── 1. Intent ──────────────────────────────────────────────────
         info!("building intent");
@@ -396,7 +412,9 @@ impl Pipeline {
         let mut tiles = SimpleRasterizer.rasterize(&geometry, &registry)?;
         debug!(width = tiles.width, height = tiles.height, "tile map ready");
 
-        // ── 4b. Pre-compute reserved paths for scatter safety ──────────
+        // ── 4b. Pre-compute reserved paths for scatter safety ──────────────
+        // Includes both door-to-door paths AND corridor cells that pass through
+        // room interiors (corridors routed through rooms must stay walkable).
         let reserved_per_room: HashMap<
             crate::spatial::plan::SpaceId,
             HashSet<crate::geometry::geom::Point>,
@@ -405,7 +423,14 @@ impl Pipeline {
             .iter()
             .map(|placed| {
                 let doors = find_room_doors(&tiles, placed.rect);
-                let (_, reserved) = compute_reserved_paths(&tiles, placed.rect, &doors);
+                let (_, mut reserved) = compute_reserved_paths(&tiles, placed.rect, &doors);
+                // Also reserve corridor cells routed through this room.
+                let corridor_cells = crate::interior::paths::compute_corridor_passthrough(
+                    placed.rect,
+                    &geometry.links,
+                    &doors,
+                );
+                reserved.extend(corridor_cells);
                 (placed.space_id, reserved)
             })
             .collect();
@@ -422,7 +447,7 @@ impl Pipeline {
 
         // ── 5b. Interior planning ──────────────────────────────────────
         info!("computing interior plans");
-        let interiors = build_interior_plans(&geometry, &tiles);
+        let interiors = build_interior_plans(&geometry, &tiles, Some(&spatial));
         debug!(rooms = interiors.len(), "interior plans ready");
 
         // ── 6. Feature planning + validation ───────────────────────
@@ -456,10 +481,36 @@ impl Pipeline {
         )?;
         self.validate_entities(&entities, &features, &tiles, &geometry, &spatial)?;
 
-        // ── 8. Build annotations ─────────────────────────────────────────────
+        // ── 8. Build annotations ─────────────────────────────────────────
         info!("building annotations");
         let annotations = Self::build_annotations(&spatial, &geometry, &tiles, &entities);
         debug!(count = annotations.len(), "annotations ready");
+
+        // Log tension curve.
+        for ann in &annotations {
+            debug!(
+                room = %ann.letter,
+                label = ann.label.as_deref().unwrap_or("<unnamed>"),
+                tension = %ann.tension,
+                "tension assigned"
+            );
+        }
+
+        // ── 9. Pacing validation ─────────────────────────────────────────
+        info!("validating pacing");
+        let pacing_result = crate::validate::pacing::PacingValidator
+            .validate(&crate::validate::pacing::PacingValidationInput { spatial: &spatial });
+        log_validation_issues(&pacing_result.issues);
+        let pacing_warnings: Vec<String> = pacing_result
+            .issues
+            .iter()
+            .map(|i| i.message.clone())
+            .collect();
+        if pacing_warnings.is_empty() {
+            info!("pacing validation passed");
+        } else {
+            debug!(count = pacing_warnings.len(), "pacing observations");
+        }
 
         info!("pipeline complete");
         Ok(PipelineResult {
@@ -471,6 +522,8 @@ impl Pipeline {
             entities,
             interiors,
             annotations,
+            seed,
+            pacing_warnings,
         })
     }
 
@@ -489,11 +542,15 @@ impl Pipeline {
         use crate::intent::graph::NodeRole;
         use crate::interior::paths::find_room_doors;
         use crate::tag::Tag;
+        use crate::tension::compute_tension;
 
         let spec_map: std::collections::HashMap<
             crate::spatial::plan::SpaceId,
             &crate::spatial::plan::SpaceSpec,
         > = spatial.spaces.iter().map(|s| (s.id, s)).collect();
+
+        // Compute tension for all rooms.
+        let tension_map = compute_tension(spatial);
 
         let mut annotations = Vec::new();
         let mut letter = b'A';
@@ -511,6 +568,11 @@ impl Pipeline {
 
             let is_entry = spec.role == NodeRole::Entry;
             let is_goal = spec.structural_tags.contains(&Tag::from("main_goal"));
+
+            let tension = tension_map
+                .get(&placed.space_id)
+                .copied()
+                .unwrap_or(crate::tension::TensionLevel::Low);
 
             let assigned_letter = letter as char;
             if letter < b'Z' {
@@ -538,6 +600,7 @@ impl Pipeline {
                 doors,
                 is_entry,
                 is_goal,
+                tension,
                 letter: assigned_letter,
                 center,
                 named_entities,
@@ -560,6 +623,16 @@ impl Pipeline {
         let base_config = PlacementConfig::default();
         let mut last_errors: Vec<String> = Vec::new();
 
+        // Auto-select StreetSkeleton for Urban location kinds when using default strategy
+        let effective_strategy = if spatial.location_kind == LocationKind::Urban {
+            match &self.config.geometry_strategy {
+                GeometryStrategy::ForceDirected => &GeometryStrategy::StreetSkeleton,
+                other => other,
+            }
+        } else {
+            &self.config.geometry_strategy
+        };
+
         for attempt in 0..=self.config.max_retries {
             let config = self.relaxed_config(&base_config, attempt);
 
@@ -567,11 +640,11 @@ impl Pipeline {
                 attempt = attempt,
                 min_gap = config.min_gap,
                 separation_gap = config.separation_gap,
-                strategy = ?self.config.geometry_strategy,
+                strategy = ?effective_strategy,
                 "geometry attempt"
             );
 
-            let plan = match &self.config.geometry_strategy {
+            let plan = match effective_strategy {
                 GeometryStrategy::Column => {
                     let planner = ColumnGeometryPlanner { config };
                     planner.plan(spatial, rng)
@@ -582,6 +655,12 @@ impl Pipeline {
                             placement: config,
                             ..ForceDirectedConfig::default()
                         },
+                    };
+                    planner.plan(spatial, rng)
+                }
+                GeometryStrategy::StreetSkeleton => {
+                    let planner = StreetSkeletonPlanner {
+                        config: config.clone(),
                     };
                     planner.plan(spatial, rng)
                 }
